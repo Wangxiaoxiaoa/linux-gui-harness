@@ -49,18 +49,18 @@ Requirements: Python 3.10+, Rust toolchain, Linux with `xvfb` and `openbox`.
 
 ## Supported agents
 
-`linux-x11-harness setup` auto-configures both the MCP server and the agent skill where the agent supports them.
+`linux-x11-harness setup` auto-configures the MCP server and the agent skill where the agent supports them. Displays are always destroyed when the owning session ends; hosts with lifecycle hooks (Codex) can end them earlier via `lxh_session_end`.
 
-| Agent | MCP server | Agent skill |
-|---|---|---|
-| [Claude Code](https://claude.ai/code) | ✅ | ✅ |
-| [Codex](https://github.com/openai/codex) | ✅ | ✅ |
-| [Qwen](https://qwen.aliyun.com/) | ✅ | — |
-| [OpenCode](https://opencode.ai/) | ✅ | — |
-| [Kimi Code](https://kimi-code.moonshot.cn/) | — | ✅ |
-| [Pi](https://pi.ai/) | — | ✅ |
+| Agent | MCP server | Agent skill | Session-end hook |
+|---|---|---|---|
+| [Claude Code](https://claude.ai/code) | ✅ | ✅ | — (disconnect cleanup) |
+| [Codex](https://github.com/openai/codex) | ✅ | ✅ | ✅ (`hooks.json`) |
+| [Qwen](https://qwen.aliyun.com/) | ✅ | — | — (disconnect cleanup) |
+| [OpenCode](https://opencode.ai/) | ✅ | — | — (disconnect cleanup) |
+| [Kimi Code](https://kimi-code.moonshot.cn/) | — | ✅ | — (skill-only) |
+| [Pi](https://pi.ai/) | ✅ | ✅ | — (disconnect cleanup) |
 
-Other MCP-compatible agents can connect manually with `linux-x11-harness mcp`.
+Other MCP-compatible agents can connect manually with `linux-x11-harness mcp`. See [Session lifecycle](docs/session-lifecycle.md).
 
 ## Documentation
 
