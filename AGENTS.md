@@ -58,9 +58,8 @@ code, is wrong.
   too): a host sending a newline-less multi-megabyte line grows memory
   unbounded. Trusted-local-socket trade-off; per the no-defensive-
   programming rule this is recorded, not guarded.
-- **`/new` and `/clear` in codex start a new thread (new threadId) but
-  keep the MCP proxy connection alive**: displays owned by the old
-  threadId are not reaped until the process exits. SessionEnd hooks do
-  not fire for /new. Mitigation: skill discipline (clean up before
-  /new); a display-level idle detector is the eventual fix if this
-  bites.
+- **Codex MCP connections are per-thread**: `/new`, `/clear`, and fork
+  each spawn a fresh MCP runtime and tear the old one down (including
+  its process group), so session-scoped display cleanup fires on the
+  connection close. Do not assume one proxy connection survives across
+  threads.
