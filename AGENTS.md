@@ -54,3 +54,13 @@ code, is wrong.
 - **x11rb computes TCP ports as `6000 + display` in u16** — display
   numbers must stay ≤ 59535 on both the create path (bounded by
   `pid % 59400`) and the attach path (validated).
+- **MCP proxy `read_line` has no length cap** (daemon `handle_client`
+  too): a host sending a newline-less multi-megabyte line grows memory
+  unbounded. Trusted-local-socket trade-off; per the no-defensive-
+  programming rule this is recorded, not guarded.
+- **`/new` and `/clear` in codex start a new thread (new threadId) but
+  keep the MCP proxy connection alive**: displays owned by the old
+  threadId are not reaped until the process exits. SessionEnd hooks do
+  not fire for /new. Mitigation: skill discipline (clean up before
+  /new); a display-level idle detector is the eventual fix if this
+  bites.

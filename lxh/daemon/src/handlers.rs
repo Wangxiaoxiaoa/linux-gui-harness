@@ -159,10 +159,15 @@ pub async fn ensure_display_owner(
 
 /// Destroy the harness displays owned by a client session, called when
 /// that session's connection closes. Displays owned by *other* sessions
-/// are left alone; unowned legacy displays (created before session keys
-/// existed) are attributed to whichever connection is holding them and
-/// go with it. Attached external displays are always left alone —
+/// are left alone. Attached external displays are always left alone —
 /// they were not created here and outlive any single session.
+///
+/// Unowned displays (created without a session envelope: an older proxy,
+/// or a direct socket client) are attributed to whichever connection is
+/// ending and destroyed with it. With multiple concurrent connections
+/// this can reclaim a display another connection is still using — known
+/// boundary, accepted: it only arises for envelope-less clients, and
+/// those are transient by nature (tests, manual debugging).
 pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&str>) {
     let mut ids = Vec::new();
     {
@@ -175,8 +180,8 @@ pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&
             match (display.owner(), session_key) {
                 // Owned by this session.
                 (Some(owner), Some(key)) if owner == key => ids.push(id.clone()),
-                // Unowned legacy display: the only connection that could
-                // still be holding it is the one that just ended.
+                // Unowned display: no envelope, no other claimant — the
+                // ending connection takes it (see the boundary note above).
                 (None, _) => ids.push(id.clone()),
                 // Owned by a different (still-connected) session.
                 _ => {}
