@@ -47,10 +47,12 @@ impl DaemonServer {
             tokio::spawn(async move {
                 let mut session = ClientSession::new();
                 session.client_name = peer_name(&stream);
-                if let Err(e) = handle_client(state, &mut session, stream).await {
+                if let Err(e) = handle_client(Arc::clone(&state), &mut session, stream).await {
                     eprintln!("client handler error: {e}");
                 }
-                // Displays outlive sessions by design; nothing to clean up.
+                // The session is over: harness displays created through this
+                // connection are destroyed. Attached external displays survive.
+                handlers::destroy_session_displays(&state).await;
             });
         }
     }

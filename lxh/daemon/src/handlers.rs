@@ -114,6 +114,38 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
 
+/// Destroy every harness display created through this client connection.
+/// Called when the MCP proxy disconnects: the session is over, so its
+/// displays go with it. Attached external displays are left alone —
+/// they were not created here and outlive any single session.
+pub async fn destroy_session_displays(state: &DaemonState) {
+    let mut ids = Vec::new();
+    {
+        let displays = state.displays.read().await;
+        for (id, display) in displays.iter() {
+            if !display.lock().await.is_external() {
+                ids.push(id.clone());
+            }
+        }
+    }
+    for id in ids {
+        let display = match find_display(state, &id).await {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+        let display_str = display.lock().await.display().to_string();
+        // Unregister first: the display is logically gone the moment the
+        // session ends; teardown then runs without holding up observers.
+        state.displays.write().await.remove(&id);
+        state.drivers.write().await.remove(&id);
+        state.zooms.lock().unwrap().remove(&id);
+        state.previews.close(&id);
+        let _ = display.lock().await.destroy().await;
+        state.vnc.stop(&display_str).await;
+        state.runtime.clipboard().stop(&display_str);
+    }
+}
+
 pub async fn destroy_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;

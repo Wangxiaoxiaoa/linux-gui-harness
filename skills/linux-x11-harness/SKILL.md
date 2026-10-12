@@ -41,10 +41,10 @@ launching GUI apps.
 
 ## Lifecycle
 
-Displays outlive client sessions — a dropped connection never destroys
-them. Start a new session with `lxh_list_displays` to rediscover what
-exists, attach with `lxh_display_attach` (pass the `display` field, e.g.
-`:18648`), and clean up with `lxh_display_destroy` when done.
+Displays are destroyed when their session ends (client disconnect).
+Create what you need with `lxh_display_create`, and destroy displays
+you no longer need with `lxh_display_destroy` as the session goes —
+leftover displays are removed automatically at session end anyway.
 
 1. `lxh_list_displays` — see what already exists (skip create if reusable).
 2. `lxh_display_create` — creates the display and the preview panel.

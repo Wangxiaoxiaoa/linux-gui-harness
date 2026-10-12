@@ -397,10 +397,9 @@ pub fn tool_definitions() -> Vec<Value> {
         tool_def(
             "lxh_list_displays",
             "List all harness displays. Each entry includes display_id, display \
-             number, size and running app count. Displays survive client \
-             disconnects, so call this first in a new session to rediscover \
-             displays created earlier; attach with lxh_display_attach using \
-             the display field (e.g. :18648).",
+             number, size and running app count. Displays are destroyed when \
+             the session that created them ends; create a new one with \
+             lxh_display_create if none fits.",
             root_schema::<ListDisplaysArgs>(),
         ),
         tool_def(
