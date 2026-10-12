@@ -66,6 +66,7 @@ Other MCP-compatible agents can connect manually with `linux-x11-harness mcp`.
 
 - [Usage guide](docs/usage.md) — display previews, sockets, and multi-agent isolation.
 - [Agent skill](skills/linux-x11-harness/SKILL.md) — quick reference for agents.
+- [Session lifecycle](docs/session-lifecycle.md) — how displays are tied to agent sessions, and per-host hooks.
 - [Architecture](docs/ARCHITECTURE.md) — crate layout and design notes.
 
 ## License
