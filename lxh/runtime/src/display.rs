@@ -39,6 +39,9 @@ pub struct Display {
     wm: Option<ManagedProcess>,
     apps: std::sync::Mutex<Vec<ManagedProcess>>,
     driver: Arc<DefaultDriver>,
+    /// Identity of the session that created this display, set by the
+    /// daemon right after creation. `None` for attached external displays.
+    owner: std::sync::Mutex<Option<String>>,
 }
 
 impl Display {
@@ -64,6 +67,7 @@ impl Display {
             wm: Some(wm),
             apps: std::sync::Mutex::new(Vec::new()),
             driver,
+            owner: std::sync::Mutex::new(None),
         })
     }
 
@@ -80,6 +84,7 @@ impl Display {
             wm: None,
             apps: std::sync::Mutex::new(Vec::new()),
             driver,
+            owner: std::sync::Mutex::new(None),
         })
     }
 
@@ -93,6 +98,15 @@ impl Display {
 
     pub fn kind(&self) -> &DisplayKind {
         &self.kind
+    }
+
+    /// Identity of the owning session, set by the daemon after creation.
+    pub fn owner(&self) -> Option<String> {
+        self.owner.lock().unwrap().clone()
+    }
+
+    pub fn set_owner(&self, owner: String) {
+        *self.owner.lock().unwrap() = Some(owner);
     }
 
     pub fn is_external(&self) -> bool {

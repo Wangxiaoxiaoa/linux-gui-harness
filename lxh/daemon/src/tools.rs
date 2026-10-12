@@ -602,6 +602,14 @@ pub fn tool_definitions() -> Vec<Value> {
             "Close the preview window for a display",
             root_schema::<DisplayIdArgs>(),
         ),
+        tool_def(
+            "lxh_session_end",
+            "End the current agent session's displays: destroy every harness \
+             display this session created. Call when the task is fully done \
+             and the user confirmed nothing else is needed; displays are \
+             also destroyed automatically when the session disconnects.",
+            root_schema::<ListDisplaysArgs>(),
+        ),
     ]
 }
 
@@ -617,10 +625,11 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 35, "expected 35 tool definitions");
+        assert_eq!(defs.len(), 36, "expected 36 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
+        assert!(names.contains(&"lxh_session_end"));
         assert!(names.contains(&"lxh_list_displays"));
         assert!(names.contains(&"lxh_list_apps"));
         assert!(names.contains(&"lxh_list_user_windows"));

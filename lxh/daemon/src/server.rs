@@ -52,7 +52,7 @@ impl DaemonServer {
                 }
                 // The session is over: harness displays created through this
                 // connection are destroyed. Attached external displays survive.
-                handlers::destroy_session_displays(&state).await;
+                handlers::destroy_session_displays(&state, session.session_key.as_deref()).await;
             });
         }
     }
@@ -93,7 +93,7 @@ async fn handle_client(
             continue;
         }
 
-        let req = match serde_json::from_str::<Request>(&line) {
+        let req = match Request::parse(&line) {
             Ok(req) => req,
             Err(e) => {
                 let resp = Response::error(None, -32700, &format!("invalid json: {e}"));
@@ -106,6 +106,9 @@ async fn handle_client(
         };
 
         let is_notification = req.id.is_none();
+        if let Some(info) = &req.session {
+            session.session_key = Some(info.key());
+        }
         let resp = dispatch(&state, session, req).await;
         if is_notification {
             continue;
@@ -170,6 +173,15 @@ async fn dispatch_tool_call(
         .as_str()
         .ok_or_else(|| LxhError::InvalidArgument("tool name required".into()))?;
     let args = &params["arguments"];
+
+    // Cross-session guard: a display with an owner may only be touched by
+    // its owning session (identified by the proxy's session envelope).
+    // Attached external displays have no owner and stay open to the
+    // attaching session's disconnect semantics (never auto-destroyed).
+    if let Some(display_id) = args.get("display_id").and_then(Value::as_str) {
+        handlers::ensure_display_owner(state, session, display_id).await?;
+    }
+
     match name {
         "lxh_display_create" => handlers::create_display(state, session, args).await,
         "lxh_display_destroy" => handlers::destroy_display(state, args).await,
@@ -199,6 +211,7 @@ async fn dispatch_tool_call(
         "lxh_display_info" => handlers::display_info(state, args).await,
         "lxh_preview_open" => handlers::preview_open(state, session, args).await,
         "lxh_preview_close" => handlers::preview_close(state, args).await,
+        "lxh_session_end" => handlers::session_end(state, session).await,
         "lxh_invoke_menu" => handlers::invoke_menu(state, args).await,
         "lxh_verify_state" => handlers::verify_state(state, args).await,
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,

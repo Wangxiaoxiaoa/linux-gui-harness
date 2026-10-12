@@ -41,6 +41,11 @@ pub struct ZoomContext {
 
 pub struct ClientSession {
     pub client_name: Option<String>,
+    /// Stable identity of the owning agent session: the host's thread id
+    /// when the proxy forwards one, otherwise the proxy's PID. Set on
+    /// every request; displays created through this session record it as
+    /// their owner.
+    pub session_key: Option<String>,
 }
 
 impl Default for ClientSession {
@@ -51,7 +56,10 @@ impl Default for ClientSession {
 
 impl ClientSession {
     pub fn new() -> Self {
-        Self { client_name: None }
+        Self {
+            client_name: None,
+            session_key: None,
+        }
     }
 }
 
@@ -76,6 +84,10 @@ pub async fn create_display(
     let id = display.id().to_string();
     let display_str = display.display().to_string();
     let driver = Arc::new(DefaultDriver::new(&display_str)?);
+
+    if let Some(key) = &session.session_key {
+        display.set_owner(key.clone());
+    }
 
     if preview {
         let title = preview_title(session, &args.name);
@@ -114,17 +126,60 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     Ok(json!({ "display_id": id, "display": display_str }))
 }
 
-/// Destroy every harness display created through this client connection.
-/// Called when the MCP proxy disconnects: the session is over, so its
-/// displays go with it. Attached external displays are left alone —
+/// Cross-session guard: reject tool calls that touch a display owned by
+/// a different session. Displays created before the session-key mechanism
+/// (or without any session envelope) have no owner and stay open to all
+/// connections; attached external displays are likewise unowned.
+pub async fn ensure_display_owner(
+    state: &DaemonState,
+    session: &ClientSession,
+    display_id: &str,
+) -> Result<(), LxhError> {
+    // Not in the registry (e.g. lxh_display_attach reaching for an
+    // external display): nothing owned to check against.
+    let Ok(display) = find_display(state, display_id).await else {
+        return Ok(());
+    };
+    let owner = display.lock().await.owner();
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    match &session.session_key {
+        Some(key) if *key == owner => Ok(()),
+        other => Err(LxhError::InvalidArgument(format!(
+            "display {display_id} belongs to another session{}; \
+             create a new display for this session instead",
+            other
+                .as_ref()
+                .map(|k| format!(" (this session: {k})"))
+                .unwrap_or_default(),
+        ))),
+    }
+}
+
+/// Destroy the harness displays owned by a client session, called when
+/// that session's connection closes. Displays owned by *other* sessions
+/// are left alone; unowned legacy displays (created before session keys
+/// existed) are attributed to whichever connection is holding them and
+/// go with it. Attached external displays are always left alone —
 /// they were not created here and outlive any single session.
-pub async fn destroy_session_displays(state: &DaemonState) {
+pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&str>) {
     let mut ids = Vec::new();
     {
         let displays = state.displays.read().await;
         for (id, display) in displays.iter() {
-            if !display.lock().await.is_external() {
-                ids.push(id.clone());
+            let display = display.lock().await;
+            if display.is_external() {
+                continue;
+            }
+            match (display.owner(), session_key) {
+                // Owned by this session.
+                (Some(owner), Some(key)) if owner == key => ids.push(id.clone()),
+                // Unowned legacy display: the only connection that could
+                // still be holding it is the one that just ended.
+                (None, _) => ids.push(id.clone()),
+                // Owned by a different (still-connected) session.
+                _ => {}
             }
         }
     }
@@ -144,6 +199,19 @@ pub async fn destroy_session_displays(state: &DaemonState) {
         state.vnc.stop(&display_str).await;
         state.runtime.clipboard().stop(&display_str);
     }
+}
+
+/// Explicit end-of-session request from the model or a host hook: destroy
+/// the harness displays owned by this session. Without a session key there
+/// is nothing to attribute — report that instead of guessing.
+pub async fn session_end(state: &DaemonState, session: &ClientSession) -> Result<Value, LxhError> {
+    let Some(key) = &session.session_key else {
+        return Err(LxhError::InvalidArgument(
+            "no session identity available; nothing to end".into(),
+        ));
+    };
+    destroy_session_displays(state, Some(key)).await;
+    Ok(json!({ "success": true }))
 }
 
 pub async fn destroy_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
@@ -167,12 +235,14 @@ pub async fn list_displays(state: &DaemonState) -> Result<Value, LxhError> {
     let mut list = Vec::new();
     for (id, display) in displays.iter() {
         let info = display.lock().await.info();
+        let owner = display.lock().await.owner();
         list.push(json!({
             "display_id": id,
             "display": info.display,
             "width": info.width,
             "height": info.height,
             "app_count": info.app_count,
+            "owner": owner,
         }));
     }
     Ok(json!({ "displays": list, "count": list.len() }))
