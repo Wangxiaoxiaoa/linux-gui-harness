@@ -54,22 +54,6 @@ def _run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     )
 
 
-def _register_claude(command: str) -> None:
-    if not shutil.which("claude"):
-        _info("claude not found; skipping")
-        return
-
-    _link_skill(Path.home() / ".claude" / "skills")
-
-    # Remove any existing registration to keep the config idempotent.
-    _run(["claude", "mcp", "remove", "linux-x11-harness"])
-    result = _run(["claude", "mcp", "add", "linux-x11-harness", "--", command])
-    if result.returncode == 0:
-        _log("Registered MCP server for Claude Code")
-    else:
-        _err(f"Failed to register Claude MCP server: {result.stderr}")
-
-
 def _register_codex(command: str) -> None:
     if not shutil.which("codex"):
         _info("codex not found; skipping")
@@ -106,29 +90,6 @@ def _register_codex(command: str) -> None:
         events.append({"handlers": [handler]})
         hooks_path.write_text(json.dumps(data, indent=2))
         _log("Registered session_end hook for Codex")
-
-
-def _register_kimi() -> None:
-    if not shutil.which("kimi"):
-        _info("kimi not found; skipping")
-        return
-
-    _link_skill(Path.home() / ".kimi-code" / "skills")
-    _info("Kimi Code skill linked (MCP servers are not yet supported by kimi-code)")
-
-
-def _register_qwen(command: str) -> None:
-    if not shutil.which("qwen"):
-        _info("qwen not found; skipping")
-        return
-
-    # Qwen stores project-scoped MCP settings in <cwd>/.qwen/settings.json.
-    _run(["qwen", "mcp", "remove", "linux-x11-harness"])
-    result = _run(["qwen", "mcp", "add", "linux-x11-harness", command])
-    if result.returncode == 0:
-        _log("Registered MCP server for Qwen")
-    else:
-        _err(f"Failed to register Qwen MCP server: {result.stderr}")
 
 
 def _register_opencode(command: str) -> None:
@@ -223,10 +184,7 @@ def setup_agents() -> None:
     command = _resolve_command()
     _log(f"Using MCP command: {command}")
 
-    _register_claude(command)
     _register_codex(command)
-    _register_kimi()
-    _register_qwen(command)
     _register_opencode(command)
     _register_pi(command)
 
