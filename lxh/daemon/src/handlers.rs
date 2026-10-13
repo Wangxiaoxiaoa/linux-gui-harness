@@ -137,11 +137,19 @@ pub fn session_key(params: &Value) -> Option<String> {
             return Some(id.to_string());
         }
     }
-    params["arguments"]
-        .get("_meta")
-        .and_then(|m| m.get("session_id"))
-        .and_then(Value::as_str)
-        .map(String::from)
+    // Hook shells (pi, opencode) inject the session identity into the
+    // tool arguments at the same path codex uses at the params level.
+    let arguments = &params["arguments"];
+    for key in ["sessionId", "threadId", "session_id"] {
+        if let Some(id) = arguments
+            .get("_meta")
+            .and_then(|m| m.get(key))
+            .and_then(Value::as_str)
+        {
+            return Some(id.to_string());
+        }
+    }
+    None
 }
 
 /// Cross-session guard: reject tool calls that touch a display owned by

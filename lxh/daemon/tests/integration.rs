@@ -877,6 +877,102 @@ async fn display_destroyed_on_client_disconnect() {
         .await;
 }
 
+#[tokio::test]
+async fn session_id_binding_and_cross_session_guard() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+
+    // Root thread creates a display (codex shape: threadId + sessionId).
+    let create = conn
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false,
+                   "_meta": {"threadId": "t-root", "sessionId": "s-main"}}),
+        )
+        .await;
+    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+
+    // Subagent thread: same sessionId, different threadId — same session,
+    // allowed.
+    let info = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id,
+                   "_meta": {"threadId": "t-sub", "sessionId": "s-main"}}),
+        )
+        .await;
+    assert!(
+        info["result"]["display"].is_string(),
+        "subagent thread of the same session must be allowed"
+    );
+
+    // Foreign session (different sessionId) — rejected.
+    let foreign = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id,
+                   "_meta": {"threadId": "t-x", "sessionId": "s-other"}}),
+        )
+        .await;
+    assert!(
+        foreign["error"].is_object(),
+        "foreign sessionId must be rejected"
+    );
+
+    // pi shape: arguments._meta.session_id binds a display to its session.
+    let pi_create = conn
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false,
+                   "arguments_meta_probe": true,
+                   "_meta": {"session_id": "pi-1"}}),
+        )
+        .await;
+    let pi_id = pi_create["result"]["display_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    let owned = entries
+        .iter()
+        .find(|e| e["display_id"].as_str() == Some(pi_id.as_str()))
+        .expect("pi display present");
+    assert_eq!(owned["owner"].as_str(), Some("pi-1"));
+
+    // Foreign session touching the pi display — rejected.
+    let foreign_pi = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": pi_id,
+                   "_meta": {"sessionId": "s-other"}}),
+        )
+        .await;
+    assert!(
+        foreign_pi["error"].is_object(),
+        "foreign session must be rejected"
+    );
+
+    // session_end destroys the calling session's displays only.
+    conn.call_tool("lxh_session_end", json!({"_meta": {"sessionId": "s-main"}}))
+        .await;
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(display_id.as_str())),
+        "session_end destroys the calling session's displays"
+    );
+    // The pi session's display belongs to another session and must survive.
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(pi_id.as_str())),
+        "other sessions' displays must survive"
+    );
+}
+
 fn python_path() -> PathBuf {
     env::var("PYTHON")
         .map(PathBuf::from)
