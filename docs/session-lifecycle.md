@@ -1,9 +1,12 @@
 # Session lifecycle hooks
 
-Harness displays are scoped to the agent session that created them: when
-the session ends, every harness display it created is destroyed
-(automatically, when the MCP client connection closes). Attached external
-displays are never destroyed automatically.
+Harness displays are scoped to the agent session that created them:
+display ownership is keyed by the host's official session id (codex's
+`sessionId`, pi's `getSessionId()`, opencode's `sessionID`), carried on
+every tool call. When the session ends, every display it created is
+destroyed — automatically when the MCP client connection closes, or
+explicitly via `lxh_session_end`. Attached external displays are never
+destroyed automatically.
 
 Hosts with lifecycle hooks can end a session explicitly instead of
 waiting for the disconnect. `lxh_session_end` destroys every harness
@@ -30,9 +33,11 @@ With this in place, ending a Codex session destroys its displays the
 moment the hook fires, rather than when the host reaps the MCP server
 process.
 
-Session identity needs no configuration: Codex attaches
-`params._meta.threadId` to every tool call, and the harness tracks
-display ownership by it.
+Session identity needs no configuration for the ownership key: Codex
+attaches both `params._meta.sessionId` and `threadId` to every tool call,
+and the harness prefers the session id. Subagent threads (different
+threadId, same sessionId) resolve to the same session; foreign session
+ids are rejected by the cross-session guard.
 
 ## pi
 
