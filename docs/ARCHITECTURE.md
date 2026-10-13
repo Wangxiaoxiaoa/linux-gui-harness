@@ -291,6 +291,29 @@ Window manager launchers (e.g., `OpenboxWM`) live in `lxh-runtime/src/wm/`.
 
 `ProcessSupervisor` is a background task that polls child processes and triggers cleanup on unexpected exit.
 
+### 6.4 Session Lifecycle
+
+Display ownership is keyed by the agent session id, resolved from each
+tool call: `params._meta.sessionId`/`threadId` (Codex attaches these
+automatically) or `arguments._meta.session_id` (injected by per-host
+hook shells — pi extensions and opencode plugins, installed by setup).
+Calls without identity create unowned displays that follow the daemon's
+lifetime.
+
+Displays are destroyed when their owning session ends:
+
+- `lxh_session_end` — explicit end-of-session from the model or a host
+  hook (codex `SessionEnd` via an `mcp_tool` handler)
+- connection close — the proxy process exiting tears down every display
+  created through it (process-crash fallback)
+- daemon exit — `shutdown()` destroys everything
+
+Cross-session guard: tool calls addressing a display owned by another
+session are rejected with the owner hint. Attached external displays
+are unowned and exempt from both the guard and automatic destruction.
+At daemon startup, stale X11 sockets and lock files from a SIGKILLed
+daemon are swept.
+
 ## 7. MCP Tool Reference
 
 All tools are prefixed with `lxh_`.
@@ -298,7 +321,7 @@ All tools are prefixed with `lxh_`.
 | Tool | Purpose | Required args |
 |------|---------|---------------|
 | `lxh_display_create` | Create display (optional `name` labels the preview) | — |
-| `lxh_list_displays` | List all displays (they survive client disconnects) | — |
+| `lxh_list_displays` | List all displays (destroyed when the owning session ends) | — |
 | `lxh_display_attach` | Attach to an existing display (e.g. `:0`) | `display_id` |
 | `lxh_display_detach` | Detach from an existing display without destroying it | `display_id` |
 | `lxh_display_destroy` | Destroy display | `display_id` |
@@ -328,6 +351,7 @@ All tools are prefixed with `lxh_`.
 | `lxh_get_desktop_overview` | Desktop overview: processes and windows | `display_id` |
 | `lxh_get_window_state` | Window metadata + optional tree + optional screenshot | `display_id`, `pid`, `window_id` |
 | `lxh_verify_state` | Single-sample state assertions with per-predicate results | `display_id`, `expect` |
+| `lxh_session_end` | Destroy all harness displays owned by the calling session | — |
 | `lxh_set_value` | Set AT-SPI editable element value | `display_id`, `pid`, `index`, `value` |
 | `lxh_click_element` | Click an AT-SPI element by pid and index | `display_id`, `pid`, `index`, `button` |
 | `lxh_invoke_menu` | Resolve and invoke a menu path through AT-SPI | `display_id`, `pid`, `path` |

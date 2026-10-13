@@ -42,16 +42,13 @@ linux-x11-harness setup
 
 ## 支持的智能体
 
-`linux-x11-harness setup` 会在智能体支持的情况下，同时注册 MCP server 和 Agent skill。
+`linux-x11-harness setup` 会在智能体支持的情况下，自动注册 MCP server、Agent skill 和会话结束钩子。display 的生命周期与所属会话绑定：会话结束时自动销毁。
 
-| 智能体 | MCP server | Agent skill |
-|---|---|---|
-| [Claude Code](https://claude.ai/code) | ✅ | ✅ |
-| [Codex](https://github.com/openai/codex) | ✅ | ✅ |
-| [Qwen](https://qwen.aliyun.com/) | ✅ | — |
-| [OpenCode](https://opencode.ai/) | ✅ | — |
-| [Kimi Code](https://kimi-code.moonshot.cn/) | — | ✅ |
-| [Pi](https://pi.ai/) | — | ✅ |
+| 智能体 | MCP server | Agent skill | 会话结束钩子 |
+|---|---|---|---|
+| [Codex](https://github.com/openai/codex) | ✅ | ✅ | ✅（hooks.json） |
+| [OpenCode](https://opencode.ai/) | ✅ | — | —（断开清理） |
+| [Pi](https://pi.ai/) | ✅ | ✅ | —（断开清理） |
 
 其他兼容 MCP 的智能体可以手动通过 `linux-x11-harness mcp` 连接。
 

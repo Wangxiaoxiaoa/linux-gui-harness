@@ -370,7 +370,7 @@ async fn tools_list_returns_all_tools() {
     let mut conn = daemon.connect().await;
     let resp = conn.call_method("tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 35, "expected 35 tools");
+    assert_eq!(tools.len(), 36, "expected 36 tools");
 
     for tool in tools {
         assert!(tool["name"].is_string(), "tool missing name: {tool}");
@@ -829,34 +829,148 @@ async fn window_lifecycle_focus_set_frame_close() {
 }
 
 #[tokio::test]
-async fn display_survives_client_disconnect() {
+async fn display_destroyed_on_client_disconnect() {
     let daemon = DaemonGuard::new().await;
-    let mut conn = daemon.connect().await;
-    let create = conn
-        .call_tool("lxh_display_create", json!({"preview": false}))
-        .await;
-    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+    let display_id = {
+        let mut conn = daemon.connect().await;
+        let create = conn
+            .call_tool("lxh_display_create", json!({"preview": false}))
+            .await;
+        create["result"]["display_id"].as_str().unwrap().to_string()
+        // conn dropped here: the session is over.
+    };
 
-    // Drop the first connection.
-    drop(conn);
+    // Give the daemon a moment to notice the disconnect and clean up.
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Reconnect to the same daemon: the display is still there and is
-    // discoverable through lxh_list_displays.
+    // Reconnect to the same daemon: the display is gone.
     let mut conn2 = daemon.connect().await;
     let list = conn2.call_tool("lxh_list_displays", json!({})).await;
     let entries = list["result"]["displays"].as_array().unwrap();
-    assert_eq!(entries.len(), 1, "exactly one display after reconnect");
-    assert_eq!(entries[0]["display_id"].as_str(), Some(display_id.as_str()));
-    assert_eq!(entries[0]["app_count"].as_u64(), Some(0));
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(display_id.as_str())),
+        "display should be destroyed after its client disconnected"
+    );
 
-    let info = conn2
-        .call_tool("lxh_display_info", json!({"display_id": display_id}))
+    // Attached external displays are NOT destroyed on disconnect.
+    let user_display = std::env::var("DISPLAY").unwrap_or_else(|_| ":0".to_string());
+    let attach = conn2
+        .call_tool("lxh_display_attach", json!({"display_id": user_display}))
         .await;
-    assert!(info["result"]["display"].is_string());
+    let external_id = attach["result"]["display_id"].as_str().unwrap().to_string();
+    drop(conn2);
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
-    conn2
-        .call_tool("lxh_display_destroy", json!({"display_id": display_id}))
+    let mut conn3 = daemon.connect().await;
+    let list = conn3.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(external_id.as_str())),
+        "attached external display should survive the disconnect"
+    );
+    conn3
+        .call_tool("lxh_display_detach", json!({"display_id": external_id}))
         .await;
+}
+
+#[tokio::test]
+async fn session_id_binding_and_cross_session_guard() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+
+    // Root thread creates a display (codex shape: threadId + sessionId).
+    let create = conn
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false,
+                   "_meta": {"threadId": "t-root", "sessionId": "s-main"}}),
+        )
+        .await;
+    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+
+    // Subagent thread: same sessionId, different threadId — same session,
+    // allowed.
+    let info = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id,
+                   "_meta": {"threadId": "t-sub", "sessionId": "s-main"}}),
+        )
+        .await;
+    assert!(
+        info["result"]["display"].is_string(),
+        "subagent thread of the same session must be allowed"
+    );
+
+    // Foreign session (different sessionId) — rejected.
+    let foreign = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id,
+                   "_meta": {"threadId": "t-x", "sessionId": "s-other"}}),
+        )
+        .await;
+    assert!(
+        foreign["error"].is_object(),
+        "foreign sessionId must be rejected"
+    );
+
+    // pi shape: arguments._meta.session_id binds a display to its session.
+    let pi_create = conn
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false,
+                   "arguments_meta_probe": true,
+                   "_meta": {"session_id": "pi-1"}}),
+        )
+        .await;
+    let pi_id = pi_create["result"]["display_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    let owned = entries
+        .iter()
+        .find(|e| e["display_id"].as_str() == Some(pi_id.as_str()))
+        .expect("pi display present");
+    assert_eq!(owned["owner"].as_str(), Some("pi-1"));
+
+    // Foreign session touching the pi display — rejected.
+    let foreign_pi = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": pi_id,
+                   "_meta": {"sessionId": "s-other"}}),
+        )
+        .await;
+    assert!(
+        foreign_pi["error"].is_object(),
+        "foreign session must be rejected"
+    );
+
+    // session_end destroys the calling session's displays only.
+    conn.call_tool("lxh_session_end", json!({"_meta": {"sessionId": "s-main"}}))
+        .await;
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(display_id.as_str())),
+        "session_end destroys the calling session's displays"
+    );
+    // The pi session's display belongs to another session and must survive.
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(pi_id.as_str())),
+        "other sessions' displays must survive"
+    );
 }
 
 fn python_path() -> PathBuf {

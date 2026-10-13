@@ -50,6 +50,7 @@ packages = ["python/src/linux_x11_harness"]
 artifacts = [
     "python/src/linux_x11_harness/bin/*",
     "python/src/linux_x11_harness/skill/*",
+    "python/src/linux_x11_harness/lifecycle/*",
 ]
 pure-python = false
 

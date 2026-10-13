@@ -65,6 +65,11 @@ async fn main() {
 }
 
 async fn run_serve(socket_path: PathBuf) {
+    // A SIGKILLed daemon cannot clean up after its displays; leftover
+    // sockets and lock files would block those display numbers from ever
+    // being reused. Sweep the stale ones before binding our own socket.
+    clean_stale_x_displays();
+
     let pid = std::process::id();
     let _ = tokio::fs::write(pid_path(&socket_path), pid.to_string()).await;
 
@@ -133,6 +138,50 @@ async fn run_status(socket_path: PathBuf) {
         std::process::exit(1);
     }
     println!("running");
+}
+
+/// Remove X11 sockets and lock files whose owning X server is gone.
+///
+/// A daemon killed with SIGKILL cannot run its shutdown path, leaving
+/// `/tmp/.X11-unix/X<N>` and `/tmp/.X<N>-lock` behind; a stale socket
+/// blocks the same display number from being reused. The lock file
+/// records the X server's PID, so a display counts as stale exactly
+/// when that PID is no longer alive. Live servers are never touched.
+fn clean_stale_x_displays() {
+    let dir = match std::fs::read_dir("/tmp/.X11-unix") {
+        Ok(dir) => dir,
+        Err(_) => return,
+    };
+    for entry in dir.flatten() {
+        let Some(name) = entry.file_name().to_str().map(String::from) else {
+            continue;
+        };
+        let Some(num) = name.strip_prefix('X') else {
+            continue;
+        };
+        if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit()) {
+            continue;
+        }
+        let lock_path = std::path::Path::new("/tmp").join(format!(".X{num}-lock"));
+        // Without a lock file there is no owner to verify against; leave
+        // the socket alone rather than risk deleting a live display's.
+        let Ok(lock) = std::fs::read_to_string(&lock_path) else {
+            continue;
+        };
+        let Some(pid) = lock
+            .lines()
+            .nth(1)
+            .and_then(|l| l.trim().parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if std::path::Path::new("/proc").join(pid.to_string()).exists() {
+            continue;
+        }
+        let _ = std::fs::remove_file(entry.path());
+        let _ = std::fs::remove_file(&lock_path);
+        eprintln!("[startup] removed stale X display :{num} (pid {pid} gone)");
+    }
 }
 
 /// Start the daemon in its own session so it is reparented to init
@@ -211,6 +260,7 @@ async fn run_mcp(socket_path: PathBuf) {
     let _ = to_stdout.await;
 }
 
+/// Forward bytes between one reader and one writer.
 async fn forward<R, W>(mut reader: R, mut writer: W)
 where
     R: tokio::io::AsyncRead + Unpin,
@@ -230,5 +280,46 @@ where
             }
             Err(_) => break,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleans_stale_x_display_leftovers() {
+        // Use a high display number no real server would occupy.
+        let num = 59530u32;
+        let socket = std::path::Path::new("/tmp/.X11-unix").join(format!("X{num}"));
+        let lock = std::path::Path::new("/tmp").join(format!(".X{num}-lock"));
+        std::fs::write(&socket, b"").unwrap();
+        // Second line of the lock file holds the X server's PID; /proc/0
+        // never exists, so this PID reads as dead.
+        std::fs::write(&lock, format!("     {num}\n      0\n")).unwrap();
+
+        clean_stale_x_displays();
+
+        assert!(!socket.exists(), "stale socket should be removed");
+        assert!(!lock.exists(), "stale lock file should be removed");
+    }
+
+    #[test]
+    fn keeps_live_x_display_leftovers() {
+        let num = 59531u32;
+        let socket = std::path::Path::new("/tmp/.X11-unix").join(format!("X{num}"));
+        let lock = std::path::Path::new("/tmp").join(format!(".X{num}-lock"));
+        std::fs::write(&socket, b"").unwrap();
+        // Our own PID is alive, so this display must be kept.
+        let own_pid = std::process::id();
+        std::fs::write(&lock, format!("     {num}\n      {own_pid}\n")).unwrap();
+
+        clean_stale_x_displays();
+
+        assert!(socket.exists(), "live display socket must be kept");
+        assert!(lock.exists(), "live display lock must be kept");
+
+        std::fs::remove_file(&socket).unwrap();
+        std::fs::remove_file(&lock).unwrap();
     }
 }

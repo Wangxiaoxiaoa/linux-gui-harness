@@ -38,5 +38,12 @@ class CustomBuildHook(BuildHookInterface):
             shutil.rmtree(skill_dst)
         shutil.copytree(skill_src, skill_dst)
 
+        lifecycle_src = project_root / "lifecycle"
+        lifecycle_dst = pkg_dir / "lifecycle"
+        if lifecycle_dst.exists():
+            shutil.rmtree(lifecycle_dst)
+        if lifecycle_src.exists():
+            shutil.copytree(lifecycle_src, lifecycle_dst)
+
         build_data["tag"] = "py3-none-linux_x86_64"
         build_data["pure_python"] = False

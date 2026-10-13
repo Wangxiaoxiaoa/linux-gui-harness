@@ -1,11 +1,14 @@
 """One-click registration of skill and MCP server with common agents."""
 
+import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
-from linux_x11_harness import get_binary_path, get_skill_path
+from linux_x11_harness import get_binary_path, get_lifecycle_path, get_skill_path
 
 
 def _log(msg: str) -> None:
@@ -53,22 +56,6 @@ def _run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
     )
 
 
-def _register_claude(command: str) -> None:
-    if not shutil.which("claude"):
-        _info("claude not found; skipping")
-        return
-
-    _link_skill(Path.home() / ".claude" / "skills")
-
-    # Remove any existing registration to keep the config idempotent.
-    _run(["claude", "mcp", "remove", "linux-x11-harness"])
-    result = _run(["claude", "mcp", "add", "linux-x11-harness", "--", command])
-    if result.returncode == 0:
-        _log("Registered MCP server for Claude Code")
-    else:
-        _err(f"Failed to register Claude MCP server: {result.stderr}")
-
-
 def _register_codex(command: str) -> None:
     if not shutil.which("codex"):
         _info("codex not found; skipping")
@@ -83,28 +70,28 @@ def _register_codex(command: str) -> None:
     else:
         _err(f"Failed to register Codex MCP server: {result.stderr}")
 
-
-def _register_kimi() -> None:
-    if not shutil.which("kimi"):
-        _info("kimi not found; skipping")
-        return
-
-    _link_skill(Path.home() / ".kimi-code" / "skills")
-    _info("Kimi Code skill linked (MCP servers are not yet supported by kimi-code)")
-
-
-def _register_qwen(command: str) -> None:
-    if not shutil.which("qwen"):
-        _info("qwen not found; skipping")
-        return
-
-    # Qwen stores project-scoped MCP settings in <cwd>/.qwen/settings.json.
-    _run(["qwen", "mcp", "remove", "linux-x11-harness"])
-    result = _run(["qwen", "mcp", "add", "linux-x11-harness", command])
-    if result.returncode == 0:
-        _log("Registered MCP server for Qwen")
-    else:
-        _err(f"Failed to register Qwen MCP server: {result.stderr}")
+    # Session-end hook: destroy the session's harness displays when the
+    # session ends, via the lxh MCP server itself (mcp_tool handler — no
+    # script). Merged idempotently into ~/.codex/hooks.json.
+    hooks_path = Path.home() / ".codex" / "hooks.json"
+    data: dict = {}
+    if hooks_path.exists():
+        try:
+            data = json.loads(hooks_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _warn(f"Could not parse {hooks_path}; skipping hooks registration: {e}")
+            return
+    events = data.setdefault("hooks", {}).setdefault("session_end", [])
+    handler = {"type": "mcp_tool", "server": "lxh", "tool": "lxh_session_end"}
+    already = any(
+        handler in entry.get("handlers", [])
+        for entry in events
+        if isinstance(entry, dict)
+    )
+    if not already:
+        events.append({"handlers": [handler]})
+        hooks_path.write_text(json.dumps(data, indent=2))
+        _log("Registered session_end hook for Codex")
 
 
 def _register_opencode(command: str) -> None:
@@ -131,14 +118,46 @@ def _register_opencode(command: str) -> None:
     else:
         _err(f"Failed to register OpenCode MCP server: {result.stderr}")
 
+    # Lifecycle plugin: inject opencode's session id into lxh_* tool calls.
+    plugin_src = get_lifecycle_path() / "opencode" / "lxh-lifecycle.js"
+    plugin_dir = Path.home() / ".config" / "opencode" / "plugins"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_dst = plugin_dir / "lxh-lifecycle.js"
+    shutil.copy2(plugin_src, plugin_dst)
+    _log(f"Installed opencode lifecycle plugin -> {plugin_dst}")
 
-def _register_pi() -> None:
+
+def _register_pi(command: str) -> None:
     home = Path.home()
     if not shutil.which("pi") and not (home / ".pi").exists():
         _info("pi not found; skipping")
         return
 
     _link_skill(home / ".pi" / "agent" / "skills")
+
+    # pi reads user-level MCP servers from ~/.pi/agent/mcp.json; merge
+    # idempotently so repeated setups and manual entries survive.
+    mcp_path = home / ".pi" / "agent" / "mcp.json"
+    data: dict = {}
+    if mcp_path.exists():
+        try:
+            data = json.loads(mcp_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _warn(f"Could not parse {mcp_path}; skipping MCP registration: {e}")
+            return
+    servers = data.setdefault("mcpServers", {})
+    servers["linux-x11-harness"] = {"command": command, "args": ["mcp"]}
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(data, indent=2))
+    _log("Registered MCP server for pi")
+
+    # Lifecycle shell: inject pi's session id into lxh_* tool calls.
+    ext_src = get_lifecycle_path() / "pi" / "lxh-lifecycle.ts"
+    ext_dir = home / ".pi" / "agent" / "extensions"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    ext_dst = ext_dir / "lxh-lifecycle.ts"
+    shutil.copy2(ext_src, ext_dst)
+    _log(f"Installed pi lifecycle extension -> {ext_dst}")
 
 
 # (apt package name, binary name to check with shutil.which)
@@ -176,19 +195,55 @@ def _check_system_deps() -> None:
     _log("System dependencies installed")
 
 
+def _stop_stale_daemons() -> None:
+    """Stop running lxh daemons so the next session picks up the new build.
+
+    A pip upgrade replaces the binary but cannot touch detached daemons
+    spawned by earlier sessions; they keep serving the old code until
+    killed. Sweeps the well-known pid file plus any lxh test sockets left
+    in /tmp, SIGTERMs the PIDs, and removes the stale socket/pid files.
+    """
+    stopped: set[int] = set()
+
+    candidates: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    candidates.append(Path(runtime_dir) / "linux-x11-harness.sock")
+    candidates.append(Path("/tmp") / "linux-x11-harness.sock")
+    candidates.extend(Path("/tmp").glob("lxh-*.sock"))
+
+    for sock in candidates:
+        pid_path = sock.with_suffix(".pid")
+        pid = 0
+        if pid_path.exists():
+            try:
+                pid = int(pid_path.read_text().strip())
+            except ValueError:
+                pass
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped.add(pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+        pid_path.unlink(missing_ok=True)
+        sock.unlink(missing_ok=True)
+
+    if stopped:
+        _log(f"Stopped stale daemon(s): {', '.join(map(str, sorted(stopped)))}")
+
+
 def setup_agents() -> None:
     """Detect common agents, install system deps, register skill + MCP server."""
     _check_system_deps()
+    _stop_stale_daemons()
 
     command = _resolve_command()
     _log(f"Using MCP command: {command}")
 
-    _register_claude(command)
     _register_codex(command)
-    _register_kimi()
-    _register_qwen(command)
     _register_opencode(command)
-    _register_pi()
+    _register_pi(command)
 
     print()
     _log("Setup complete. Restart your agent to use linux-x11-harness.")

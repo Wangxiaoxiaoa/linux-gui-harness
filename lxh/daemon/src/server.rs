@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 
-use crate::handlers::{self, ClientSession, DaemonState};
+use crate::handlers::{self, session_key, ClientSession, DaemonState};
 use crate::protocol::{Request, Response};
 
 pub struct DaemonServer {
@@ -47,10 +47,12 @@ impl DaemonServer {
             tokio::spawn(async move {
                 let mut session = ClientSession::new();
                 session.client_name = peer_name(&stream);
-                if let Err(e) = handle_client(state, &mut session, stream).await {
+                if let Err(e) = handle_client(Arc::clone(&state), &mut session, stream).await {
                     eprintln!("client handler error: {e}");
                 }
-                // Displays outlive sessions by design; nothing to clean up.
+                // The session is over: harness displays created through this
+                // connection are destroyed. Attached external displays survive.
+                handlers::destroy_session_displays(&state, session.session_key.as_deref()).await;
             });
         }
     }
@@ -104,6 +106,7 @@ async fn handle_client(
         };
 
         let is_notification = req.id.is_none();
+        session.session_key = session_key(&req.params);
         let resp = dispatch(&state, session, req).await;
         if is_notification {
             continue;
@@ -168,6 +171,15 @@ async fn dispatch_tool_call(
         .as_str()
         .ok_or_else(|| LxhError::InvalidArgument("tool name required".into()))?;
     let args = &params["arguments"];
+
+    // Cross-session guard: a display with an owner may only be touched by
+    // its owning session (identified by the proxy's session envelope).
+    // Attached external displays have no owner and stay open to the
+    // attaching session's disconnect semantics (never auto-destroyed).
+    if let Some(display_id) = args.get("display_id").and_then(Value::as_str) {
+        handlers::ensure_display_owner(state, session, display_id).await?;
+    }
+
     match name {
         "lxh_display_create" => handlers::create_display(state, session, args).await,
         "lxh_display_destroy" => handlers::destroy_display(state, args).await,
@@ -197,6 +209,7 @@ async fn dispatch_tool_call(
         "lxh_display_info" => handlers::display_info(state, args).await,
         "lxh_preview_open" => handlers::preview_open(state, session, args).await,
         "lxh_preview_close" => handlers::preview_close(state, args).await,
+        "lxh_session_end" => handlers::session_end(state, session).await,
         "lxh_invoke_menu" => handlers::invoke_menu(state, args).await,
         "lxh_verify_state" => handlers::verify_state(state, args).await,
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,
@@ -214,10 +227,7 @@ fn peer_name(stream: &UnixStream) -> Option<String> {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     let name = comm.trim();
     let friendly = match name {
-        "claude" | "claude-code" => "Claude",
         "codex" => "Codex",
-        "kimi" | "kimi-code" => "Kimi",
-        "qwen" => "Qwen",
         "opencode" => "OpenCode",
         "pi" => "Pi",
         _ => return None,
