@@ -7,5 +7,5 @@ pub mod tools;
 pub mod vnc;
 
 pub use handlers::{ClientSession, DaemonState};
-pub use protocol::{Request, Response, SessionInfo};
+pub use protocol::{Request, Response};
 pub use server::DaemonServer;

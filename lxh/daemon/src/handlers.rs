@@ -41,9 +41,9 @@ pub struct ZoomContext {
 
 pub struct ClientSession {
     pub client_name: Option<String>,
-    /// Stable identity of the owning agent session: the host's thread id
-    /// when the proxy forwards one, otherwise the proxy's PID. Set on
-    /// every request; displays created through this session record it as
+    /// Session identity of the agent session: parsed from the request's
+    /// `params._meta` (codex) or `arguments._meta` (hook-injected shells)
+    /// on every call. Displays created through this session record it as
     /// their owner.
     pub session_key: Option<String>,
 }
@@ -124,6 +124,24 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     state.runtime.clipboard().start_spoke(&display_str);
 
     Ok(json!({ "display_id": id, "display": display_str }))
+}
+
+/// Session identity of one tool call, parsed from the request itself:
+/// codex attaches `params._meta.threadId`/`sessionId` on every call;
+/// hook-based shells (pi, opencode) inject `arguments._meta.session_id`
+/// into the tool arguments. Calls without any of these are unattributed.
+pub fn session_key(params: &Value) -> Option<String> {
+    let meta = &params["_meta"];
+    for key in ["sessionId", "threadId"] {
+        if let Some(id) = meta.get(key).and_then(Value::as_str) {
+            return Some(id.to_string());
+        }
+    }
+    params["arguments"]
+        .get("_meta")
+        .and_then(|m| m.get("session_id"))
+        .and_then(Value::as_str)
+        .map(String::from)
 }
 
 /// Cross-session guard: reject tool calls that touch a display owned by

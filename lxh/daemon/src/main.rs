@@ -3,10 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use lxh_daemon::server::DaemonServer;
-use lxh_daemon::SessionInfo;
 use lxh_runtime::Runtime;
-use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn resolve_socket_path(args: &mut Vec<String>) -> PathBuf {
     let mut idx = None;
@@ -256,111 +254,31 @@ async fn run_mcp(socket_path: PathBuf) {
     // Forward both directions concurrently. Awaiting the stdin->socket
     // direction before polling socket->stdout would deadlock interactive
     // clients until stdin closes.
-    let to_stdout = tokio::spawn(forward_plain(read_half, tokio::io::stdout()));
-    forward_requests(tokio::io::stdin(), &mut write_half).await;
+    let to_stdout = tokio::spawn(forward(read_half, tokio::io::stdout()));
+    forward(tokio::io::stdin(), &mut write_half).await;
     let _ = write_half.shutdown().await;
     let _ = to_stdout.await;
 }
 
-/// Forward the host's JSON-RPC stream to the daemon, attaching session
-/// identity to every request.
-///
-/// The proxy is the session's representative on the daemon side: it
-/// extracts the host's `_meta.threadId`/`sessionId` (codex sends these on
-/// every call) and stamps each request with a session envelope the daemon
-/// tracks displays by. Responses flow back through `forward_plain`,
-/// untouched.
-async fn forward_requests<R, W>(reader: R, mut writer: W)
+/// Forward bytes between one reader and one writer.
+async fn forward<R, W>(mut reader: R, mut writer: W)
 where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let proxy_pid = std::process::id();
-    let mut session = SessionInfo {
-        client: None,
-        thread_id: None,
-        proxy_pid,
-    };
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
+    let mut buf = [0u8; 8192];
     loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
+        match reader.read(&mut buf).await {
             Ok(0) => break,
-            Ok(_) => {}
-            Err(_) => break,
-        }
-        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
-            // Not JSON (or malformed): pass through so the daemon's parser
-            // produces the proper error response for the host.
-            let _ = writer.write_all(line.as_bytes()).await;
-            let _ = writer.write_all(b"\n").await;
-            continue;
-        };
-
-        match msg.get("method").and_then(Value::as_str) {
-            Some("initialize") => {
-                if let Some(info) = msg
-                    .pointer("/params/clientInfo/name")
-                    .and_then(Value::as_str)
-                {
-                    session.client = Some(info.to_string());
+            Ok(n) => {
+                if writer.write_all(&buf[..n]).await.is_err() {
+                    break;
+                }
+                if writer.flush().await.is_err() {
+                    break;
                 }
             }
-            Some("tools/call") | Some("resources/read") | Some("prompts/get") => {
-                // Hosts attach session identity either at params._meta
-                // threadId or params._meta.sessionId.
-                for key in ["threadId", "sessionId"] {
-                    if let Some(id) = msg
-                        .pointer("/params/_meta")
-                        .and_then(|m| m.get(key))
-                        .and_then(Value::as_str)
-                    {
-                        session.thread_id = Some(id.to_string());
-                        break;
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        let out = json!({
-            "session": session,
-            "inner": msg,
-        });
-        if writer
-            .write_all(serde_json::to_string(&out).unwrap_or_default().as_bytes())
-            .await
-            .is_err()
-        {
-            break;
-        }
-        if writer.write_all(b"\n").await.is_err() {
-            break;
-        }
-    }
-}
-
-/// Daemon-to-host direction: responses and notifications, byte-for-byte.
-async fn forward_plain<R, W>(reader: R, mut writer: W)
-where
-    R: tokio::io::AsyncRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) => break,
-            Ok(_) => {}
             Err(_) => break,
-        }
-        if writer.write_all(line.as_bytes()).await.is_err() {
-            break;
-        }
-        if writer.flush().await.is_err() {
-            break;
         }
     }
 }

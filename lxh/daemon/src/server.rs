@@ -10,7 +10,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::RwLock;
 
-use crate::handlers::{self, ClientSession, DaemonState};
+use crate::handlers::{self, session_key, ClientSession, DaemonState};
 use crate::protocol::{Request, Response};
 
 pub struct DaemonServer {
@@ -93,7 +93,7 @@ async fn handle_client(
             continue;
         }
 
-        let req = match Request::parse(&line) {
+        let req = match serde_json::from_str::<Request>(&line) {
             Ok(req) => req,
             Err(e) => {
                 let resp = Response::error(None, -32700, &format!("invalid json: {e}"));
@@ -106,9 +106,7 @@ async fn handle_client(
         };
 
         let is_notification = req.id.is_none();
-        if let Some(info) = &req.session {
-            session.session_key = Some(info.key());
-        }
+        session.session_key = session_key(&req.params);
         let resp = dispatch(&state, session, req).await;
         if is_notification {
             continue;
