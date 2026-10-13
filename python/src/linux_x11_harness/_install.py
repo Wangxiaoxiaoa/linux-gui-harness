@@ -1,7 +1,9 @@
 """One-click registration of skill and MCP server with common agents."""
 
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -193,9 +195,48 @@ def _check_system_deps() -> None:
     _log("System dependencies installed")
 
 
+def _stop_stale_daemons() -> None:
+    """Stop running lxh daemons so the next session picks up the new build.
+
+    A pip upgrade replaces the binary but cannot touch detached daemons
+    spawned by earlier sessions; they keep serving the old code until
+    killed. Sweeps the well-known pid file plus any lxh test sockets left
+    in /tmp, SIGTERMs the PIDs, and removes the stale socket/pid files.
+    """
+    stopped: set[int] = set()
+
+    candidates: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    candidates.append(Path(runtime_dir) / "linux-x11-harness.sock")
+    candidates.append(Path("/tmp") / "linux-x11-harness.sock")
+    candidates.extend(Path("/tmp").glob("lxh-*.sock"))
+
+    for sock in candidates:
+        pid_path = sock.with_suffix(".pid")
+        pid = 0
+        if pid_path.exists():
+            try:
+                pid = int(pid_path.read_text().strip())
+            except ValueError:
+                pass
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped.add(pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+        pid_path.unlink(missing_ok=True)
+        sock.unlink(missing_ok=True)
+
+    if stopped:
+        _log(f"Stopped stale daemon(s): {', '.join(map(str, sorted(stopped)))}")
+
+
 def setup_agents() -> None:
     """Detect common agents, install system deps, register skill + MCP server."""
     _check_system_deps()
+    _stop_stale_daemons()
 
     command = _resolve_command()
     _log(f"Using MCP command: {command}")
