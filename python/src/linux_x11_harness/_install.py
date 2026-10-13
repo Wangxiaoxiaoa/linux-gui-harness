@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from linux_x11_harness import get_binary_path, get_skill_path
+from linux_x11_harness import get_binary_path, get_lifecycle_path, get_skill_path
 
 
 def _log(msg: str) -> None:
@@ -116,6 +116,14 @@ def _register_opencode(command: str) -> None:
     else:
         _err(f"Failed to register OpenCode MCP server: {result.stderr}")
 
+    # Lifecycle plugin: inject opencode's session id into lxh_* tool calls.
+    plugin_src = get_lifecycle_path() / "opencode" / "lxh-lifecycle.js"
+    plugin_dir = Path.home() / ".config" / "opencode" / "plugins"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_dst = plugin_dir / "lxh-lifecycle.js"
+    shutil.copy2(plugin_src, plugin_dst)
+    _log(f"Installed opencode lifecycle plugin -> {plugin_dst}")
+
 
 def _register_pi(command: str) -> None:
     home = Path.home()
@@ -140,6 +148,14 @@ def _register_pi(command: str) -> None:
     mcp_path.parent.mkdir(parents=True, exist_ok=True)
     mcp_path.write_text(json.dumps(data, indent=2))
     _log("Registered MCP server for pi")
+
+    # Lifecycle shell: inject pi's session id into lxh_* tool calls.
+    ext_src = get_lifecycle_path() / "pi" / "lxh-lifecycle.ts"
+    ext_dir = home / ".pi" / "agent" / "extensions"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    ext_dst = ext_dir / "lxh-lifecycle.ts"
+    shutil.copy2(ext_src, ext_dst)
+    _log(f"Installed pi lifecycle extension -> {ext_dst}")
 
 
 # (apt package name, binary name to check with shutil.which)
