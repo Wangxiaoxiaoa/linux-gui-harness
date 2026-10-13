@@ -33,8 +33,8 @@ linux-x11-harness setup
 
 This detects installed agents and registers:
 
-- Skill for **pi**, **Claude Code**, **Codex**, and `.agents`.
-- MCP server for **Claude Desktop** and **Cursor**.
+- Skill for **pi**, **Codex**, and OpenCode.
+- MCP server for **pi**, **Codex**, and **OpenCode**.
 
 Restart your agent after setup.
 

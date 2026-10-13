@@ -227,10 +227,7 @@ fn peer_name(stream: &UnixStream) -> Option<String> {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
     let name = comm.trim();
     let friendly = match name {
-        "claude" | "claude-code" => "Claude",
         "codex" => "Codex",
-        "kimi" | "kimi-code" => "Kimi",
-        "qwen" => "Qwen",
         "opencode" => "OpenCode",
         "pi" => "Pi",
         _ => return None,
