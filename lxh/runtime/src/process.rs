@@ -48,7 +48,7 @@ impl ManagedProcess {
     /// then SIGKILL after the grace period if it ignores the signal.
     pub async fn kill(&mut self) -> Result<(), LxhError> {
         // tokio's Child::kill sends SIGKILL; deliver SIGTERM via the
-        // `kill` binary instead of pulling in libc/nix for one signal.
+        // `kill` binary (the crate forbids unsafe, so no libc/nix here).
         if self.pid > 0 {
             let _ = tokio::process::Command::new("kill")
                 .args(["-TERM", &self.pid.to_string()])
@@ -56,17 +56,16 @@ impl ManagedProcess {
                 .await;
             let deadline = tokio::time::Instant::now() + TERMINATE_GRACE;
             while tokio::time::Instant::now() < deadline {
-                // `kill -0` succeeds while the process is alive.
-                let alive = tokio::process::Command::new("kill")
-                    .args(["-0", &self.pid.to_string()])
-                    .status()
-                    .await
-                    .map(|s| s.success())
-                    .unwrap_or(false);
-                if !alive {
-                    return Ok(());
+                // try_wait reaps the child and reports its exit. Polling an
+                // external `kill -0` here cannot see an unreaped zombie and
+                // would always burn the full grace period even when the
+                // process exited on SIGTERM immediately.
+                match self.child.try_wait() {
+                    Ok(Some(_status)) => return Ok(()),
+                    Ok(None) => {}
+                    Err(_) => break,
                 }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+                tokio::time::sleep(Duration::from_millis(5)).await;
             }
         }
         self.child
