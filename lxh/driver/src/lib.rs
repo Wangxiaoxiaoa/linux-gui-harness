@@ -137,8 +137,14 @@ impl A11yDriver for DefaultDriver {
         self.a11y.get_desktop_overview().await
     }
 
-    async fn set_value(&self, pid: u32, index: usize, value: &str) -> Result<(), LxhError> {
-        self.a11y.set_value(pid, index, value).await
+    async fn set_value(
+        &self,
+        pid: u32,
+        index: usize,
+        value: &str,
+        focus_allowed: bool,
+    ) -> Result<(), LxhError> {
+        self.a11y.set_value(pid, index, value, focus_allowed).await
     }
 
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError> {

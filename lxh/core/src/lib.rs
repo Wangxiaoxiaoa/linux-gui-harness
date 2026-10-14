@@ -232,7 +232,16 @@ pub trait A11yDriver: Send + Sync {
         include_screenshot: bool,
     ) -> Result<GetWindowStateResult, LxhError>;
     async fn get_desktop_overview(&self) -> Result<DesktopOverview, LxhError>;
-    async fn set_value(&self, pid: u32, index: usize, value: &str) -> Result<(), LxhError>;
+    /// `focus_allowed` is false for attached external displays (the user's
+    /// desktop) and true for harness displays, where raising a toplevel is
+    /// harmless.
+    async fn set_value(
+        &self,
+        pid: u32,
+        index: usize,
+        value: &str,
+        focus_allowed: bool,
+    ) -> Result<(), LxhError>;
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError>;
     /// Resolve an application menu path (e.g. ["File", "Open"]) through
     /// AT-SPI and invoke the final item.

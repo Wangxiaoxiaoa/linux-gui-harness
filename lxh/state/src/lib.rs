@@ -384,8 +384,14 @@ impl A11yDriver for AtspiA11y {
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
     }
 
-    async fn set_value(&self, pid: u32, index: usize, value: &str) -> Result<(), LxhError> {
-        atspi::set_value(pid, index, value).await
+    async fn set_value(
+        &self,
+        pid: u32,
+        index: usize,
+        value: &str,
+        focus_allowed: bool,
+    ) -> Result<(), LxhError> {
+        atspi::set_value(pid, index, value, focus_allowed).await
     }
 
     async fn invoke_menu(&self, pid: u32, path: &[String]) -> Result<(), LxhError> {

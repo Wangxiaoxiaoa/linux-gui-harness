@@ -558,7 +558,8 @@ pub fn tool_definitions() -> Vec<Value> {
             "Set the value of an AT-SPI editable element. Accepts optional identity \
              (from a previous lxh_get_window_state) for drift-proof targeting. \
              Uses EditableText.SetTextContents with a clear-then-insert fallback. \
-             Never raises the toplevel (background contract).",
+             On harness displays the target widget is focused first when the \
+             toolkit requires it; attached external displays are never raised.",
             root_schema::<SetValueArgs>(),
         ),
         tool_def(

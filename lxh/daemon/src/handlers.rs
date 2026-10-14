@@ -930,9 +930,11 @@ pub async fn get_desktop_overview(state: &DaemonState, args: &Value) -> Result<V
 
 pub async fn set_value(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
     let args: SetValueArgs = parse_args(args)?;
+    let display = find_display(state, &args.display_id).await?;
+    let focus_allowed = !display.lock().await.is_external();
     let driver = find_driver(state, &args.display_id).await?;
     driver
-        .set_value(args.pid as u32, args.index as usize, &args.value)
+        .set_value(args.pid as u32, args.index as usize, &args.value, focus_allowed)
         .await?;
     Ok(json!({ "success": true }))
 }

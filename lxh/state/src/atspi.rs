@@ -2,6 +2,7 @@ use atspi::connection::AccessibilityConnection;
 use atspi::connection::P2P;
 use atspi::proxy::accessible::AccessibleProxy;
 use atspi::proxy::proxy_ext::ProxyExt;
+use atspi::proxy::proxy_ext::Proxies;
 use atspi::CoordType;
 use lxh_core::{A11yElement, AccessibilityTree, Bounds, LxhError};
 
@@ -291,7 +292,12 @@ impl From<&Element> for A11yElement {
     }
 }
 
-pub async fn set_value(pid: u32, index: usize, value: &str) -> Result<(), LxhError> {
+pub async fn set_value(
+    pid: u32,
+    index: usize,
+    value: &str,
+    focus_allowed: bool,
+) -> Result<(), LxhError> {
     let elements = walk_tree(pid).await?;
     let target = elements.get(index).ok_or_else(|| {
         LxhError::InvalidArgument(format!(
@@ -317,31 +323,45 @@ pub async fn set_value(pid: u32, index: usize, value: &str) -> Result<(), LxhErr
 
     let proxies = node.proxies().await.map_err(|_| LxhError::NotSupported)?;
 
-    // Focus-free on purpose: calling Component.GrabFocus here would raise
-    // the whole toplevel on some toolkits. Toolkits that expose
-    // EditableText accept the write; ones that gate it on focus must fail
-    // honestly instead of changing desktop focus implicitly.
-    if let Ok(editable) = proxies.editable_text().await {
-        if editable.set_text_contents(value).await.unwrap_or(false) {
-            return Ok(());
-        }
-        // Some toolkits reject SetTextContents but accept clear-then-insert
-        // through the editable text's insert/delete pair.
-        if let Ok(text) = proxies.text().await {
-            if let Ok(count) = text.character_count().await {
-                if editable.delete_text(0, count).await.unwrap_or(false)
-                    && editable
-                        .insert_text(0, value, value.chars().count() as i32)
-                        .await
-                        .unwrap_or(false)
-                {
-                    return Ok(());
+    // Preferred path: EditableText.SetTextContents needs no focus on most
+    // toolkits. Toolkits that gate the write on focus are handled per
+    // display kind: on a sandbox display (focus_allowed) the widget is
+    // focused first — raising the toplevel of a disposable display is
+    // harmless and visible in the preview; on an attached external display
+    // the write still fails honestly instead of changing the user's focus
+    // implicitly.
+    async fn write_focused(proxies: &Proxies<'_>, value: &str) -> Result<(), LxhError> {
+        if let Ok(editable) = proxies.editable_text().await {
+            if editable.set_text_contents(value).await.unwrap_or(false) {
+                return Ok(());
+            }
+            // Some toolkits reject SetTextContents but accept clear-then-insert
+            // through the editable text's insert/delete pair.
+            if let Ok(text) = proxies.text().await {
+                if let Ok(count) = text.character_count().await {
+                    if editable.delete_text(0, count).await.unwrap_or(false)
+                        && editable
+                            .insert_text(0, value, value.chars().count() as i32)
+                            .await
+                            .unwrap_or(false)
+                    {
+                        return Ok(());
+                    }
                 }
             }
         }
+        Err(LxhError::NotSupported)
     }
 
-    Err(LxhError::NotSupported)
+    write_focused(&proxies, value).await?;
+    if focus_allowed {
+        if let Ok(component) = proxies.component().await {
+            let _ = component.grab_focus().await;
+        }
+        write_focused(&proxies, value).await?;
+    }
+
+    Ok(())
 }
 
 /// Check whether the element holding keyboard focus (within this pid's
