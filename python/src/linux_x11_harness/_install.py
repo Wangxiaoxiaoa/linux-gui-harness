@@ -82,7 +82,7 @@ def _register_codex(command: str) -> None:
             _warn(f"Could not parse {hooks_path}; skipping hooks registration: {e}")
             return
     events = data.setdefault("hooks", {}).setdefault("session_end", [])
-    handler = {"type": "mcp_tool", "server": "lxh", "tool": "lxh_session_end"}
+    handler = {"type": "mcp_tool", "server": "linux-x11-harness", "tool": "lxh_session_end"}
     already = any(
         handler in entry.get("handlers", [])
         for entry in events
