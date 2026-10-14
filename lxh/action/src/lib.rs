@@ -88,7 +88,7 @@ pub mod raw {
             "super" | "win" => "Super_L",
             // keep the original case: exact X keysym names (Page_Down, A,
             // F1) are case-sensitive in the lookup
-            other => return Some(k.to_string()),
+            _ => return Some(k.to_string()),
         };
         Some(canonical.to_string())
     }
@@ -314,19 +314,67 @@ impl InputDriver for XtestInput {
         .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
     }
 
-    async fn drag(&self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), LxhError> {
+    async fn drag(
+        &self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        modifiers: &[&str],
+    ) -> Result<(), LxhError> {
         let display = self.display.clone();
+        let modifiers: Vec<String> = modifiers.iter().map(|s| s.to_string()).collect();
         task::spawn_blocking(move || {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = x11::root_window(&conn, screen);
 
+            // Resolve modifier keycodes up front so a bad name fails before
+            // any button event reaches the display.
+            let mapping = raw::get_mapping(&conn)?;
+            let mut modifier_codes = Vec::new();
+            for m in &modifiers {
+                let name = raw::keysym_name_for(m).ok_or_else(|| {
+                    LxhError::InvalidArgument(format!("unknown modifier: {m}"))
+                })?;
+                let keysym = raw::keysym_for_name(&name).ok_or_else(|| {
+                    LxhError::InvalidArgument(format!("unknown modifier: {m}"))
+                })?;
+                let (code, _) = raw::keycode_for_keysym(&mapping, keysym)
+                    .ok_or_else(|| {
+                        LxhError::InvalidArgument(format!("no keycode for modifier: {m}"))
+                    })?;
+                modifier_codes.push(code);
+            }
+
             raw::move_to(&conn, root, x1, y1)?;
-            raw::button(&conn, root, x1, y1, 1, true)?;
-            conn.xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, x2 as i16, y2 as i16, 0)
+            // Hold modifiers for the whole gesture; release in reverse even
+            // when a later step fails, so nothing strands on the display.
+            for &code in &modifier_codes {
+                raw::press(&conn, code, true)?;
+            }
+            let press_result = raw::button(&conn, root, x1, y1, 1, true);
+            if let Err(e) = press_result {
+                for &code in modifier_codes.iter().rev() {
+                    let _ = raw::press(&conn, code, false);
+                }
+                return Err(e);
+            }
+            let motion = conn
+                .xtest_fake_input(MOTION_NOTIFY_EVENT, 0, 0, root, x2 as i16, y2 as i16, 0)
                 .map_err(x11::xerr)?
                 .check()
-                .map_err(x11::xerr)?;
-            raw::button(&conn, root, x2, y2, 1, false)?;
+                .map_err(x11::xerr);
+            if let Err(e) = motion {
+                for &code in modifier_codes.iter().rev() {
+                    let _ = raw::press(&conn, code, false);
+                }
+                return Err(e);
+            }
+            let release = raw::button(&conn, root, x2, y2, 1, false);
+            for &code in modifier_codes.iter().rev() {
+                let _ = raw::press(&conn, code, false);
+            }
+            release?;
 
             raw::deliver(&conn)
         })

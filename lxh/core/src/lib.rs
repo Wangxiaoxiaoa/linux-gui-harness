@@ -147,7 +147,16 @@ pub trait InputDriver: Send + Sync {
     async fn click(&self, x: i32, y: i32, button: MouseButton, count: u32) -> Result<(), LxhError>;
     async fn move_mouse(&self, x: i32, y: i32) -> Result<(), LxhError>;
     async fn scroll(&self, dx: i32, dy: i32) -> Result<(), LxhError>;
-    async fn drag(&self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), LxhError>;
+    /// `modifiers` (e.g. shift, ctrl) are held for the whole gesture:
+    /// pressed after the move to the start, released after the drop.
+    async fn drag(
+        &self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        modifiers: &[&str],
+    ) -> Result<(), LxhError>;
     /// `pid` (when known) enables the AT-SPI write fallback: XTEST
     /// delivers to the focused widget; when nothing editable holds focus
     /// the text is written through the pid's tree instead.

@@ -40,8 +40,15 @@ impl InputDriver for DefaultDriver {
         self.input.scroll(dx, dy).await
     }
 
-    async fn drag(&self, x1: i32, y1: i32, x2: i32, y2: i32) -> Result<(), LxhError> {
-        self.input.drag(x1, y1, x2, y2).await
+    async fn drag(
+        &self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        modifiers: &[&str],
+    ) -> Result<(), LxhError> {
+        self.input.drag(x1, y1, x2, y2, modifiers).await
     }
 
     async fn type_text(&self, pid: Option<u32>, text: &str) -> Result<(), LxhError> {

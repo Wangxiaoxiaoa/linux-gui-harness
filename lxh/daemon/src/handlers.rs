@@ -441,8 +441,10 @@ pub async fn drag(state: &DaemonState, args: &Value) -> Result<Value, LxhError> 
     let (x1, y1) = resolve_coord(state, &args.display_id, args.x1, args.y1, from_zoom)?;
     let (x2, y2) = resolve_coord(state, &args.display_id, args.x2, args.y2, from_zoom)?;
     let driver = find_driver(state, &args.display_id).await?;
+    let modifiers: Vec<String> = args.modifiers;
+    let mrefs: Vec<&str> = modifiers.iter().map(|s| s.as_str()).collect();
     driver
-        .drag(x1 as i32, y1 as i32, x2 as i32, y2 as i32)
+        .drag(x1 as i32, y1 as i32, x2 as i32, y2 as i32, &mrefs)
         .await?;
     Ok(json!({ "success": true }))
 }

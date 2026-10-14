@@ -232,6 +232,10 @@ pub struct DragArgs {
     pub y1: f64,
     pub x2: f64,
     pub y2: f64,
+    /// Modifier keys held for the whole gesture (e.g. shift for range
+    /// selection, ctrl for copy-drag).
+    #[serde(default)]
+    pub modifiers: Vec<String>,
     #[serde(default)]
     pub from_zoom: Option<bool>,
 }

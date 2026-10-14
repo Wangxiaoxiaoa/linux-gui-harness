@@ -484,7 +484,7 @@ impl A11yDriver for AtspiA11y {
             Err(e) => {
                 // Window enumeration failed: every window predicate is
                 // unknown/ObservationUnavailable.
-                for (i, _) in &window_preds_snapshot {
+                for (_i, _) in &window_preds_snapshot {
                     predicates.push(PredicateOutcome {
                         status: VS::Unknown,
                         unknown_reason: Some(UnknownReason::ObservationUnavailable),
