@@ -25,7 +25,7 @@ plugin):
 [hooks.session_end]
 [[hooks.session_end.handlers]]
 type = "mcp_tool"
-server = "lxh"
+server = "linux-x11-harness"
 tool = "lxh_session_end"
 ```
 
@@ -34,21 +34,23 @@ moment the hook fires, rather than when the host reaps the MCP server
 process.
 
 Session identity needs no configuration for the ownership key: Codex
-attaches both `params._meta.sessionId` and `threadId` to every tool call,
-and the harness prefers the session id. Subagent threads (different
-threadId, same sessionId) resolve to the same session; foreign session
-ids are rejected by the cross-session guard.
+attaches `params._meta.sessionId` to every tool call. Subagent threads
+resolve to the same session id, so their displays belong to the session;
+foreign session ids are rejected by the cross-session guard. Thread ids
+are ignored — the harness binds displays to session ids only.
 
 ## pi
 
-No lifecycle wiring needed. `linux-x11-harness setup` writes the
-`mcpServers` entry into `~/.pi/agent/mcp.json`; pi sessions are
-identified by the proxy PID (each session spawns its own MCP client),
-so the harness attributes displays to the right session and destroys
-them when the session's connection closes — without extra wiring.
-(A code extension was considered and dropped: pi's event handlers do
-not expose tool execution, and the connection-close cleanup already
-covers it.)
+`linux-x11-harness setup` writes the `mcpServers` entry into
+`~/.pi/agent/mcp.json` and installs a small extension
+(`~/.pi/agent/extensions/lxh-lifecycle.ts`) whose `tool_call` hook
+injects the session id into every `lxh_*` call, so displays bind to pi's
+official session id. Its `session_shutdown` hook — pi fires it on quit,
+reload, and in-process session switches (`/new`, `/fork`, `/clone`,
+`/resume`) — ends the session explicitly over the daemon socket.
+pi also closes the MCP client on `session_shutdown`, so the daemon's
+connection-close cleanup backs the explicit call up; both paths are
+idempotent.
 
 ## Other agents
 
