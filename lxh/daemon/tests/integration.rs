@@ -882,18 +882,19 @@ async fn session_id_binding_and_cross_session_guard() {
     let daemon = DaemonGuard::new().await;
     let mut conn = daemon.connect().await;
 
-    // Root thread creates a display (codex shape: threadId + sessionId).
+    // Root session creates a display (codex shape: params._meta.sessionId).
     let create = conn
         .call_tool(
             "lxh_display_create",
             json!({"preview": false,
-                   "_meta": {"threadId": "t-root", "sessionId": "s-main"}}),
+                   "_meta": {"sessionId": "s-main"}}),
         )
         .await;
     let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
 
-    // Subagent thread: same sessionId, different threadId — same session,
-    // allowed.
+    // Codex subagent thread: same sessionId, different threadId. Thread ids
+    // are ignored — binding is by session id only — so this is the same
+    // session and must be allowed.
     let info = conn
         .call_tool(
             "lxh_display_info",
@@ -904,6 +905,19 @@ async fn session_id_binding_and_cross_session_guard() {
     assert!(
         info["result"]["display"].is_string(),
         "subagent thread of the same session must be allowed"
+    );
+
+    // A thread id alone carries no identity: an owned display is off limits.
+    let thread_only = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id,
+                   "_meta": {"threadId": "t-root"}}),
+        )
+        .await;
+    assert!(
+        thread_only["error"].is_object(),
+        "thread id alone must not bind or authorize"
     );
 
     // Foreign session (different sessionId) — rejected.

@@ -127,20 +127,20 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
 }
 
 /// Session identity of one tool call, parsed from the request itself:
-/// codex attaches `params._meta.threadId`/`sessionId` on every call;
-/// hook-based shells (pi, opencode) inject `arguments._meta.session_id`
-/// into the tool arguments. Calls without any of these are unattributed.
+/// codex attaches `params._meta.sessionId` on every call (its subagent
+/// threads share the session id); hook-based shells (pi, opencode) inject
+/// `arguments._meta.session_id` into the tool arguments. Thread ids are
+/// deliberately ignored — displays bind to session ids only. Calls without
+/// a session id are unattributed.
 pub fn session_key(params: &Value) -> Option<String> {
     let meta = &params["_meta"];
-    for key in ["sessionId", "threadId"] {
-        if let Some(id) = meta.get(key).and_then(Value::as_str) {
-            return Some(id.to_string());
-        }
+    if let Some(id) = meta.get("sessionId").and_then(Value::as_str) {
+        return Some(id.to_string());
     }
     // Hook shells (pi, opencode) inject the session identity into the
     // tool arguments at the same path codex uses at the params level.
     let arguments = &params["arguments"];
-    for key in ["sessionId", "threadId", "session_id"] {
+    for key in ["sessionId", "session_id"] {
         if let Some(id) = arguments
             .get("_meta")
             .and_then(|m| m.get(key))

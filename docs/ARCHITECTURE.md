@@ -294,11 +294,11 @@ Window manager launchers (e.g., `OpenboxWM`) live in `lxh-runtime/src/wm/`.
 ### 6.4 Session Lifecycle
 
 Display ownership is keyed by the agent session id, resolved from each
-tool call: `params._meta.sessionId`/`threadId` (Codex attaches these
-automatically) or `arguments._meta.session_id` (injected by per-host
-hook shells — pi extensions and opencode plugins, installed by setup).
-Calls without identity create unowned displays that follow the daemon's
-lifetime.
+tool call: `params._meta.sessionId` (Codex attaches this automatically)
+or `arguments._meta.session_id` (injected by per-host hook shells — pi
+extensions and opencode plugins, installed by setup). Thread ids are
+deliberately ignored. Calls without identity create unowned displays
+that follow the daemon's lifetime.
 
 Displays are destroyed when their owning session ends:
 
