@@ -838,15 +838,46 @@ fn pid_of_window(conn: &RustConnection, window: u32) -> Result<u32, LxhError> {
         .reply()
         .map_err(x11::xerr)?;
     if reply.format == 32 && reply.value.len() >= 4 {
-        Ok(u32::from_ne_bytes([
+        return Ok(u32::from_ne_bytes([
             reply.value[0],
             reply.value[1],
             reply.value[2],
             reply.value[3],
-        ]))
-    } else {
-        Err(LxhError::InvalidArgument("no _NET_WM_PID".into()))
+        ]));
     }
+    // No _NET_WM_PID (xterm and other classic clients): fall back to the
+    // X-Resource extension, which reports the owning client's pid for any
+    // resource id.
+    pid_via_xres(conn, window).ok_or_else(|| LxhError::InvalidArgument("no _NET_WM_PID".into()))
+}
+
+/// X-Resource fallback: resolve the pid of the X client that owns
+/// `window`. The owning client is found by matching the window id
+/// against each client's resource base/mask; QueryClientIds with the
+/// LOCAL_CLIENT_PID mask then reports its process.
+fn pid_via_xres(conn: &RustConnection, window: u32) -> Option<u32> {
+    use x11rb::protocol::res::{ClientIdMask, ClientIdSpec, ConnectionExt as _};
+    use x11rb::protocol::xproto::ConnectionExt as _;
+
+    let clients = conn.res_query_clients().ok()?.reply().ok()?.clients;
+    for (idx, c) in clients.iter().enumerate() {
+        if (window & c.resource_mask) != (c.resource_base & c.resource_mask) {
+            continue; // different client owns this id range
+        }
+        let specs = vec![ClientIdSpec {
+            client: idx as u32,
+            mask: ClientIdMask::LOCAL_CLIENT_PID,
+        }];
+        let reply = conn.res_query_client_ids(&specs).ok()?.reply().ok()?;
+        for id_value in &reply.ids {
+            for value in &id_value.value {
+                if *value != 0 {
+                    return Some(*value);
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
