@@ -4,6 +4,7 @@ use image::{ImageEncoder, RgbImage};
 use lxh_core::{
     x11, A11yDriver, Bounds, CaptureDriver, DesktopOverview, GetWindowStateResult, LxhError,
     ProcessEntry, RegionCapture, Screenshot, StateExpectation, VerificationResult, WindowEntry,
+    WindowExpectation,
 };
 use tokio::task;
 use x11rb::connection::Connection;
@@ -403,82 +404,177 @@ impl A11yDriver for AtspiA11y {
         pid: u32,
         expect: &[StateExpectation],
     ) -> Result<VerificationResult, LxhError> {
-        // Element predicate: evaluated against the live AT-SPI tree (async).
-        let element_expect = expect.iter().find_map(|e| e.element.as_ref());
-        let element_outcome = match element_expect {
-            Some(expected) => match atspi::walk_tree(pid).await {
-                Ok(elements) => {
-                    let matched = elements.iter().any(|e| {
-                        expected
-                            .role
-                            .as_ref()
-                            .is_none_or(|r| e.role.eq_ignore_ascii_case(r))
-                            && expected.label_contains.as_ref().is_none_or(|label| {
-                                e.name
-                                    .as_deref()
-                                    .is_some_and(|n| n.contains(label.as_str()))
-                            })
-                    });
-                    let observed = if matched {
-                        "matching element found".to_string()
-                    } else {
-                        "no matching element".to_string()
-                    };
-                    (matched, observed)
-                }
-                Err(e) => (false, format!("a11y tree unavailable: {e}")),
-            },
-            None => (true, "no element predicate".to_string()),
+        use lxh_core::{PredicateOutcome, UnknownReason, VerificationStatus as VS};
+
+        let mut predicates: Vec<PredicateOutcome> = Vec::new();
+        let mut matched_window_id: Option<u32> = None;
+        let mut sample = VS::Satisfied;
+        let absorb = |sample: &mut VS, outcome: &PredicateOutcome| {
+            if matches!(outcome.status, VS::Unknown) {
+                *sample = VS::Unknown;
+            } else if matches!(outcome.status, VS::Unsatisfied) && matches!(*sample, VS::Satisfied) {
+                *sample = VS::Unsatisfied;
+            }
         };
 
-        // Window predicate: X11 round-trip on a blocking thread.
+        // Window predicates: enumerate the pid's managed windows once, then
+        // evaluate EVERY window predicate against the same list.
+        let window_preds: Vec<(usize, WindowExpectation)> = expect
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| e.window.as_ref().map(|w| (i, w.clone())))
+            .collect();
+        let window_preds_snapshot = window_preds.clone();
         let display = self.display.clone();
-        let window_expect = expect.iter().find_map(|e| e.window.as_ref()).cloned();
-        let window_outcome = task::spawn_blocking(move || -> Result<(bool, String), LxhError> {
-            let Some(expected) = window_expect else {
-                return Ok((true, "no window predicate".to_string()));
-            };
+        let window_evals = task::spawn_blocking(move || -> Result<Vec<(usize, PredicateOutcome, Option<u32>)>, LxhError> {
             let (conn, screen) = x11::open_connection(&display)?;
             let root = conn.setup().roots[screen].root;
-
             let mut titles = Vec::new();
-            let mut exists = false;
-            for (_, window_pid, title) in managed_windows(&conn, root)? {
-                if window_pid != Some(pid) {
-                    continue;
-                }
-                titles.push(title.clone());
-                if expected
-                    .title_contains
-                    .as_ref()
-                    .is_none_or(|t| title.contains(t.as_str()))
-                {
-                    exists = true;
+            let mut first_window: Option<u32> = None;
+            for (window, window_pid, title) in managed_windows(&conn, root)? {
+                if window_pid == Some(pid) {
+                    if first_window.is_none() {
+                        first_window = Some(window);
+                    }
+                    titles.push((window, title));
                 }
             }
-            // exists=false cannot be proven (the window may simply not be
-            // enumerated); mirror the contract and treat absence as failure.
-            let observed = if titles.is_empty() {
-                "no window for this pid".to_string()
-            } else {
-                format!("windows: {titles:?}")
-            };
-            Ok((exists, observed))
+            let mut out = Vec::new();
+            for (i, w) in window_preds {
+                let matched: Option<u32> = titles
+                    .iter()
+                    .find(|(_, title)| {
+                        w.title_contains.as_ref().is_none_or(|t| title.contains(t.as_str()))
+                    })
+                    .map(|(window, _)| *window);
+                let outcome = match (&matched, w.exists, w.title_contains) {
+                    // Predicate satisfied: a window exists and (when a title
+                    // filter is given) its title matches.
+                    (Some(_), _, _) => PredicateOutcome {
+                        status: VS::Satisfied,
+                        unknown_reason: None,
+                        observed: format!(
+                            "windows: {:?}",
+                            titles.iter().map(|(_, t)| t).collect::<Vec<_>>()
+                        ),
+                    },
+                    // exists=false cannot be proven (absence may just be a
+                    // missed enumeration), so it is treated as unsatisfied.
+                    (None, _, _) => PredicateOutcome {
+                        status: VS::Unsatisfied,
+                        unknown_reason: None,
+                        observed: if titles.is_empty() {
+                            "no window for this pid".to_string()
+                        } else {
+                            format!(
+                                "windows: {:?}",
+                                titles.iter().map(|(_, t)| t).collect::<Vec<_>>()
+                            )
+                        },
+                    },
+                };
+                out.push((i, outcome, matched));
+            }
+            Ok(out)
         })
         .await
-        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
-        .map_err(|e: LxhError| e)?;
-
-        let results = vec![window_outcome, element_outcome];
-        let status = if results.iter().all(|(ok, _)| *ok) {
-            "satisfied"
-        } else {
-            "unsatisfied"
+        .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?;
+        let mut window_evals: Vec<(usize, PredicateOutcome, Option<u32>)> = match window_evals {
+            Ok(v) => v,
+            Err(e) => {
+                // Window enumeration failed: every window predicate is
+                // unknown/ObservationUnavailable.
+                for (i, _) in &window_preds_snapshot {
+                    predicates.push(PredicateOutcome {
+                        status: VS::Unknown,
+                        unknown_reason: Some(UnknownReason::ObservationUnavailable),
+                        observed: format!("window enumeration failed: {e}"),
+                    });
+                    absorb(&mut sample, &predicates.last().unwrap());
+                }
+                Vec::new()
+            }
         };
-        Ok(VerificationResult {
-            status: status.to_string(),
-            results,
-        })
+        window_evals.sort_by_key(|(i, _, _)| *i);
+        for (_, outcome, matched) in &window_evals {
+            predicates.push(outcome.clone());
+            absorb(&mut sample, outcome);
+            if matched_window_id.is_none() {
+                matched_window_id = *matched;
+            }
+        }
+
+        // Element predicates: live AT-SPI tree, one walk per predicate.
+        for expected in expect.iter() {
+            let Some(el) = &expected.element else { continue };
+            let outcome = match atspi::walk_tree(pid).await {
+                Ok(elements) => {
+                    let matched = elements.iter().any(|e| {
+                        el.role.as_ref().is_none_or(|r| e.role.eq_ignore_ascii_case(r))
+                            && el.label_contains.as_ref().is_none_or(|label| {
+                                e.name.as_deref().is_some_and(|n| n.contains(label.as_str()))
+                            })
+                    });
+                    if matched {
+                        PredicateOutcome {
+                            status: VS::Satisfied,
+                            unknown_reason: None,
+                            observed: "matching element found".to_string(),
+                        }
+                    } else {
+                        PredicateOutcome {
+                            status: VS::Unsatisfied,
+                            unknown_reason: Some(UnknownReason::TargetMissing),
+                            observed: "no matching element".to_string(),
+                        }
+                    }
+                }
+                Err(e) => PredicateOutcome {
+                    status: VS::Unknown,
+                    unknown_reason: Some(UnknownReason::ObservationUnavailable),
+                    observed: format!("a11y tree unavailable: {e}"),
+                },
+            };
+            predicates.push(outcome);
+            absorb(&mut sample, &predicates.last().unwrap());
+        }
+
+        // Element predicates without any window predicate still need a
+        // screenshot target: resolve the pid's first window via a second
+        // enumeration (cheap, ~1ms).
+        if matched_window_id.is_none() && expect.iter().any(|e| e.element.is_some()) {
+            let display = self.display.clone();
+            if let Ok(found) = task::spawn_blocking(move || -> Result<Option<u32>, LxhError> {
+                let (conn, screen) = x11::open_connection(&display)?;
+                let root = conn.setup().roots[screen].root;
+                Ok(managed_windows(&conn, root)?
+                    .into_iter()
+                    .find(|(_, window_pid, _)| *window_pid == Some(pid))
+                    .map(|(w, _, _)| w))
+            })
+            .await
+            .map_err(|e| LxhError::ProcessSpawnFailed(e.to_string()))?
+            {
+                matched_window_id = found;
+            }
+        }
+
+        // Empty predicates (neither window nor element) are invalid.
+        for (i, expected) in expect.iter().enumerate() {
+            if expected.window.is_none() && expected.element.is_none() {
+                predicates.insert(
+                    i.min(predicates.len()),
+                    PredicateOutcome {
+                        status: VS::Unknown,
+                        unknown_reason: Some(UnknownReason::InvalidPredicate),
+                        observed: "empty predicate".to_string(),
+                    },
+                );
+                absorb(&mut sample, &predicates.last().unwrap());
+            }
+        }
+
+        Ok(VerificationResult { status: sample, predicates, matched_window_id })
     }
 
     async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LxhError> {

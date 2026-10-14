@@ -1616,3 +1616,186 @@ async fn hover_captures_window_under_cursor() {
     conn.call_tool("lxh_display_destroy", json!({"display_id": display_id}))
         .await;
 }
+
+
+#[tokio::test]
+async fn verify_state_v2_semantics() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+
+    // Chromium sets _NET_WM_PID (window predicates can bind to it);
+    // xterm exposes no AT-SPI, exercising unknown/ObservationUnavailable.
+    let display_id = {
+        let r = conn
+            .call_tool("lxh_display_create", json!({"preview": false}))
+            .await;
+        r["result"]["display_id"].as_str().unwrap().to_string()
+    };
+    let launch = conn
+        .call_tool(
+            "lxh_app_launch",
+            json!({"display_id": display_id, "command": "chromium",
+                   "args": ["--user-data-dir=/tmp/lxh-test-profile",
+                            "--no-first-run", "--no-default-browser-check"]}),
+        )
+        .await;
+    let chromium_pid = launch["result"]["pid"].as_u64().expect("launch pid");
+
+    let mut attributed = false;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let overview = conn
+            .call_tool("lxh_get_desktop_overview", json!({"display_id": display_id}))
+            .await;
+        if let Some(windows) = overview["result"]["windows"].as_array() {
+            if windows.iter().any(|w| w["pid"].as_u64() == Some(chromium_pid)) {
+                attributed = true;
+                break;
+            }
+        }
+    }
+    assert!(attributed, "chromium window attributed to its pid");
+
+    // Immediate satisfied with a matching window title.
+    let ok = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": chromium_pid,
+                   "expect": [{"window": {"title_contains": "Chromium"}}],
+                   "_meta": {"sessionId": "v2"}}),
+        )
+        .await;
+    assert_eq!(ok["result"]["status"].as_str(), Some("satisfied"));
+    assert_eq!(ok["result"]["stable"].as_bool(), Some(true));
+    assert_eq!(ok["result"]["samples"].as_u64(), Some(1));
+
+    // timeout_ms consumes the full budget on an impossible title and
+    // reports unsatisfied (not unknown).
+    let miss = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": chromium_pid,
+                   "expect": [{"window": {"title_contains": "no-such-title"}}],
+                   "timeout_ms": 1200,
+                   "_meta": {"sessionId": "v2"}}),
+        )
+        .await;
+    assert_eq!(miss["result"]["status"].as_str(), Some("unsatisfied"));
+    assert!(
+        miss["result"]["elapsed_ms"].as_u64().unwrap_or(0) >= 1100,
+        "the full timeout budget must be consumed"
+    );
+
+    // Multi-predicate: every entry is evaluated (the old find_map
+    // silently dropped all but the first of each kind).
+    let multi = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": chromium_pid,
+                   "expect": [
+                       {"window": {"title_contains": "Chromium"}},
+                       {"window": {"title_contains": "no-such"}},
+                       {"window": {"exists": true}}
+                   ],
+                   "_meta": {"sessionId": "v2"}}),
+        )
+        .await;
+    assert_eq!(multi["result"]["status"].as_str(), Some("unsatisfied"));
+    assert_eq!(
+        multi["result"]["predicates"].as_array().unwrap().len(),
+        3,
+        "all window predicates must be evaluated"
+    );
+
+    // include_screenshot attaches visual evidence.
+    let shot = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": chromium_pid,
+                   "expect": [{"window": {"title_contains": "Chromium"}}],
+                   "include_screenshot": true,
+                   "_meta": {"sessionId": "v2"}}),
+        )
+        .await;
+    assert!(
+        shot["result"]["screenshot"].as_str().unwrap_or_default().len() > 100,
+        "screenshot evidence attached"
+    );
+
+    // Element predicates on xterm (no AT-SPI): unknown with reason.
+    let launch = conn
+        .call_tool(
+            "lxh_app_launch",
+            json!({"display_id": display_id, "command": "xterm"}),
+        )
+        .await;
+    let xterm_pid = launch["result"]["pid"].as_u64().expect("xterm pid");
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let unknown = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": xterm_pid,
+                   "expect": [{"element": {"role": "frame"}}],
+                   "_meta": {"sessionId": "v2"}}),
+        )
+        .await;
+    assert_eq!(unknown["result"]["status"].as_str(), Some("unknown"));
+    let preds = unknown["result"]["predicates"].as_array().unwrap();
+    assert_eq!(preds[0]["unknown_reason"].as_str(), Some("ObservationUnavailable"));
+
+    // Cleanup
+    let _ = conn.call_tool("lxh_app_terminate", json!({"display_id": display_id, "pid": chromium_pid})).await;
+    let _ = conn.call_tool("lxh_app_terminate", json!({"display_id": display_id, "pid": xterm_pid})).await;
+    let _ = conn.call_tool("lxh_display_destroy", json!({"display_id": display_id})).await;
+}
+
+#[tokio::test]
+async fn verify_state_v2_stable_samples() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+
+    let display_id = {
+        let r = conn
+            .call_tool("lxh_display_create", json!({"preview": false}))
+            .await;
+        r["result"]["display_id"].as_str().unwrap().to_string()
+    };
+    let launch = conn
+        .call_tool(
+            "lxh_app_launch",
+            json!({"display_id": display_id, "command": "chromium",
+                   "args": ["--user-data-dir=/tmp/lxh-test-profile2",
+                            "--no-first-run", "--no-default-browser-check"]}),
+        )
+        .await;
+    let pid = launch["result"]["pid"].as_u64().expect("launch pid");
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let overview = conn
+            .call_tool("lxh_get_desktop_overview", json!({"display_id": display_id}))
+            .await;
+        if let Some(windows) = overview["result"]["windows"].as_array() {
+            if windows.iter().any(|w| w["pid"].as_u64() == Some(pid)) {
+                break;
+            }
+        }
+    }
+
+    // A stable static state with stable_samples=2 satisfies across
+    // consecutive samples.
+    let ok = conn
+        .call_tool(
+            "lxh_verify_state",
+            json!({"display_id": display_id, "pid": pid,
+                   "expect": [{"window": {"title_contains": "Chromium"}}],
+                   "timeout_ms": 5000,
+                   "stable_samples": 2,
+                   "_meta": {"sessionId": "v2s"}}),
+        )
+        .await;
+    assert_eq!(ok["result"]["status"].as_str(), Some("satisfied"));
+    assert!(ok["result"]["samples"].as_u64().unwrap_or(0) >= 2);
+
+    let _ = conn.call_tool("lxh_app_terminate", json!({"display_id": display_id, "pid": pid})).await;
+    let _ = conn.call_tool("lxh_display_destroy", json!({"display_id": display_id})).await;
+}

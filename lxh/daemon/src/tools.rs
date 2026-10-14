@@ -102,6 +102,16 @@ pub struct VerifyStateArgs {
     pub pid: u32,
     /// One to eight predicates, combined with logical AND.
     pub expect: Vec<StateExpectationArgs>,
+    /// Bounded wait: keep sampling until the predicates hold or the \
+    /// deadline passes. Zero performs a single sample.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+    /// Consecutive satisfied samples required before returning satisfied.
+    #[serde(default)]
+    pub stable_samples: Option<u64>,
+    /// Attach a screenshot of the final window state as visual evidence.
+    #[serde(default)]
+    pub include_screenshot: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -530,10 +540,15 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "lxh_verify_state",
-            "Assert read-only state predicates for a process: window (exists, \
-             title_contains) and AT-SPI element (role, label_contains), combined with \
-             logical AND. Returns per-predicate outcomes with the observed state. \
-             Single sample; call lxh_wait between attempts if the UI is still settling.",
+            "Deterministically verify UI state: window (exists, title_contains) \
+             and AT-SPI element (role, label_contains) predicates, combined with \
+             logical AND. Returns per-predicate outcomes with the observed state \
+             and a three-state verdict (satisfied/unsatisfied/unknown). \
+             UI changes are asynchronous: pass timeout_ms to keep sampling until \
+             the predicates hold (e.g. after clicking a button that opens a \
+             dialog), and stable_samples to require the state to hold across \
+             consecutive samples. include_screenshot attaches the final window \
+             screenshot as visual evidence for multimodal callers.",
             root_schema::<VerifyStateArgs>(),
         ),
         tool_def(

@@ -643,6 +643,8 @@ pub async fn invoke_menu(state: &DaemonState, args: &Value) -> Result<Value, Lxh
 }
 
 pub async fn verify_state(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {
+    use lxh_core::{UnknownReason, VerificationStatus};
+
     let args: VerifyStateArgs = parse_args(args)?;
     for (i, e) in args.expect.iter().enumerate() {
         if let Some(w) = &e.window {
@@ -676,13 +678,114 @@ pub async fn verify_state(state: &DaemonState, args: &Value) -> Result<Value, Lx
         })
         .collect();
 
-    let result = driver.verify_state(args.pid, &expect).await?;
-    let results: Vec<Value> = result
-        .results
+    // Sampling loop: one pass when timeout_ms is unset (v1 behavior);
+    // otherwise sample every 200ms until the predicates hold across
+    // stable_samples consecutive samples or the deadline passes.
+    let timeout_ms = args.timeout_ms.unwrap_or(0);
+    let stable_needed = args.stable_samples.unwrap_or(1).max(1);
+    let deadline = if timeout_ms > 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms))
+    } else {
+        None
+    };
+    let interval = std::time::Duration::from_millis(200);
+    let started = std::time::Instant::now();
+
+    let mut consecutive: u64 = 0;
+    let mut samples: u64 = 0;
+    let mut last: Option<lxh_core::VerificationResult> = None;
+    loop {
+        let sample = driver.verify_state(args.pid, &expect).await?;
+        samples += 1;
+        let all_satisfied = sample
+            .predicates
+            .iter()
+            .all(|p| p.status == VerificationStatus::Satisfied);
+        consecutive = if all_satisfied { consecutive + 1 } else { 0 };
+        last = Some(sample);
+        let proven = all_satisfied && consecutive >= stable_needed;
+        match deadline {
+            Some(d) => {
+                if proven || std::time::Instant::now() >= d {
+                    break;
+                }
+            }
+            None => break,
+        }
+        tokio::time::sleep(interval).await;
+    }
+    let result = last.expect("at least one sample taken");
+
+    let all_satisfied = result
+        .predicates
         .iter()
-        .map(|(satisfied, observed)| json!({ "satisfied": satisfied, "observed": observed }))
+        .all(|p| p.status == VerificationStatus::Satisfied);
+    let stable = all_satisfied && consecutive >= stable_needed;
+    let (status, _unknown_reason) = if all_satisfied && stable {
+        ("satisfied", None)
+    } else if all_satisfied {
+        ("unknown", Some(UnknownReason::StabilityUnproven))
+    } else if result
+        .predicates
+        .iter()
+        .any(|p| p.status == VerificationStatus::Unknown)
+    {
+        // Observation failed for at least one predicate: report unknown with
+        // that predicate's reason (observation problems are retryable;
+        // unsatisfied predicates are not).
+        let reason = result
+            .predicates
+            .iter()
+            .find(|p| p.status == VerificationStatus::Unknown)
+            .and_then(|p| p.unknown_reason);
+        ("unknown", reason)
+    } else {
+        ("unsatisfied", None)
+    };
+
+    let predicates: Vec<Value> = result
+        .predicates
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let mut node = json!({
+                "index": i,
+                "status": match p.status {
+                    VerificationStatus::Satisfied => "satisfied",
+                    VerificationStatus::Unsatisfied => "unsatisfied",
+                    VerificationStatus::Unknown => "unknown",
+                },
+                "observed": p.observed,
+            });
+            if let Some(reason) = p.unknown_reason {
+                node["unknown_reason"] = json!(match reason {
+                    UnknownReason::InvalidPredicate => "InvalidPredicate",
+                    UnknownReason::TargetMissing => "TargetMissing",
+                    UnknownReason::ObservationUnavailable => "ObservationUnavailable",
+                    UnknownReason::StabilityUnproven => "StabilityUnproven",
+                });
+            }
+            node
+        })
         .collect();
-    Ok(json!({ "status": result.status, "results": results }))
+
+    let mut out = json!({
+        "status": status,
+        "stable": stable,
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+        "samples": samples,
+        "predicates": predicates,
+    });
+    if args.include_screenshot.unwrap_or(false) {
+        if let Some(window_id) = result.matched_window_id {
+            if let Ok(shot) = driver.screenshot_window(window_id).await {
+                out["screenshot"] = json!(
+                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &shot.data)
+                );
+            }
+        }
+    }
+    Ok(out)
 }
 
 pub async fn hover(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

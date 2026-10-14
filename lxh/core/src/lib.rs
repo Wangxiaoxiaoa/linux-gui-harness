@@ -214,12 +214,48 @@ pub struct ElementExpectation {
     pub label_contains: Option<String>,
 }
 
+/// Three-state verdict for a verification sample or predicate. `Unknown`
+/// distinguishes "cannot tell" (no data, not stable yet) from a definite
+/// `Unsatisfied`, so the caller can choose between retrying and changing
+/// strategy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum VerificationStatus {
+    Satisfied,
+    Unsatisfied,
+    Unknown,
+}
+
+/// Why a predicate could not be judged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum UnknownReason {
+    /// The predicate object sets neither a window nor an element part.
+    InvalidPredicate,
+    /// The asserted window/element is not present, so nothing to observe.
+    TargetMissing,
+    /// The observation channel (AT-SPI tree, window enumeration) failed.
+    ObservationUnavailable,
+    /// Still satisfied at the deadline, but `stable_samples` was not
+    /// reached — the state may be transient.
+    StabilityUnproven,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PredicateOutcome {
+    pub status: VerificationStatus,
+    pub unknown_reason: Option<UnknownReason>,
+    pub observed: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct VerificationResult {
-    /// "satisfied" when every predicate holds, "unsatisfied" otherwise.
-    pub status: String,
-    /// Per-predicate outcome with a short observed-state description.
-    pub results: Vec<(bool, String)>,
+    /// Sample-level verdict: `Satisfied` when every predicate holds,
+    /// `Unknown` when any could not be judged, `Unsatisfied` otherwise.
+    pub status: VerificationStatus,
+    /// Per-predicate outcomes in `expect` order.
+    pub predicates: Vec<PredicateOutcome>,
+    /// A window of the verified process that matched (or, without a
+    /// window predicate, the first window found) — the screenshot target.
+    pub matched_window_id: Option<u32>,
 }
 
 #[async_trait]
