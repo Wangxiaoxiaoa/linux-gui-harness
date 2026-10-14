@@ -172,6 +172,22 @@ pub struct GetWindowStateArgs {
     pub include_tree: bool,
     #[serde(default)]
     pub include_screenshot: bool,
+    /// Cap the number of returned tree elements (token budget for the \
+    /// model). Elements beyond the cap are dropped with \
+    /// truncated=true.
+    #[serde(default)]
+    pub max_elements: Option<u32>,
+    /// Cap the tree depth.
+    #[serde(default)]
+    pub max_depth: Option<u32>,
+    /// Server-side filter: only elements whose role or name contains \
+    /// this substring (case-insensitive) are returned.
+    #[serde(default)]
+    pub query: Option<String>,
+    /// Downscale the screenshot so its longest edge is at most this \
+    /// many pixels (fewer image tokens for multimodal callers).
+    #[serde(default)]
+    pub max_image_dimension: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

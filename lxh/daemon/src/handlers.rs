@@ -912,9 +912,23 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
     });
 
     if let Some(tree) = state.tree {
-        let elements: Vec<Value> = tree
+        // Server-side budget: query filter first (keep matching elements),
+        // then depth cap, then element count cap. Applied after the walk so
+        // the AT-SPI semantics are untouched; the model pays only for what
+        // it asked for.
+        let query = args.query.as_ref().map(|q| q.to_lowercase());
+        let matches_query = |role: &str, name: Option<&String>| match &query {
+            Some(q) => {
+                role.to_lowercase().contains(q)
+                    || name.is_some_and(|n| n.to_lowercase().contains(q))
+            }
+            None => true,
+        };
+        let mut elements: Vec<Value> = tree
             .elements
             .iter()
+            .filter(|e| matches_query(&e.role, e.name.as_ref()))
+            .filter(|e| args.max_depth.is_none_or(|d| (e.depth as u32) <= d))
             .map(|e| {
                 let mut node = json!({
                     "index": e.index,
@@ -948,11 +962,29 @@ pub async fn get_window_state(state: &DaemonState, args: &Value) -> Result<Value
                 node
             })
             .collect();
-        result["tree"] = json!({ "elements": elements });
+        // Element-count cap after filtering; parents beyond the cap keep
+        // their indexes valid (indexes are stable, links may be dropped).
+        let total = elements.len();
+        if let Some(max) = args.max_elements {
+            elements.truncate(max as usize);
+        }
+        let truncated = args
+            .max_elements
+            .is_some_and(|max| total > max as usize);
+        result["tree"] = json!({
+            "elements": elements,
+            "truncated": truncated,
+            "elements_returned": elements.len(),
+            "elements_total": total,
+        });
     }
 
     if let Some(screenshot) = state.screenshot {
-        result["screenshot"] = json!(encode_png(&screenshot.data));
+        let data = match args.max_image_dimension {
+            Some(max_dim) => downscale_png(&screenshot.data, max_dim),
+            None => encode_png(&screenshot.data),
+        };
+        result["screenshot"] = json!(data);
     }
 
     Ok(result)
@@ -1070,4 +1102,41 @@ async fn find_driver(state: &DaemonState, id: &str) -> Result<Arc<dyn Driver>, L
 
 fn encode_png(data: &[u8]) -> String {
     base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data)
+}
+
+/// Downscale a PNG so its longest edge is at most `max_dim` pixels
+/// (never upscaled). Falls back to the original bytes on any decode
+/// problem rather than failing the whole call.
+fn downscale_png(data: &[u8], max_dim: u32) -> String {
+    let decoder = match image::codecs::png::PngDecoder::new(std::io::Cursor::new(data)) {
+        Ok(d) => d,
+        Err(_) => return encode_png(data),
+    };
+    use image::{ImageDecoder, ImageEncoder};
+    let (w, h) = decoder.dimensions();
+    let long = w.max(h);
+    if long <= max_dim || long == 0 {
+        return encode_png(data);
+    }
+    let scale = max_dim as f64 / long as f64;
+    let out_w = ((w as f64 * scale).round() as u32).max(1);
+    let out_h = ((h as f64 * scale).round() as u32).max(1);
+    let resized = (|| -> Option<Vec<u8>> {
+        let mut buf = vec![0u8; decoder.total_bytes() as usize];
+        decoder.read_image(&mut buf).ok()?;
+        let img = image::RgbaImage::from_raw(w, h, buf)?;
+        let scaled = image::imageops::resize(
+            &img,
+            out_w,
+            out_h,
+            image::imageops::FilterType::Triangle,
+        );
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(std::io::Cursor::new(&mut png))
+            .write_image(&scaled, out_w, out_h, image::ExtendedColorType::Rgba8)
+            .ok()?;
+        Some(png)
+    })()
+    .unwrap_or_else(|| data.to_vec());
+    encode_png(&resized)
 }
