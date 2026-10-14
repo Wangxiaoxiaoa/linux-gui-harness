@@ -13,6 +13,34 @@ waiting for the disconnect. `lxh_session_end` destroys every harness
 display owned by the calling session. It is safe to call at any point in
 a session; calling it twice is a no-op the second time.
 
+## Fork inheritance and reown
+
+`/fork` and `/clone` create a new session id, which would leave the
+display bound to the old one. `lxh_display_reown` transfers a display
+to another session id; only the display's current owner may call it
+(the caller's session identity must match), so the cross-session guard
+stays intact.
+
+The pi extension uses this automatically: a `session_shutdown` with
+reason `fork` stashes the session's display ids (keyed by the target
+session file pi reports), and the forked session's `session_start`
+re-owns them — the GUI keeps running across the fork. A `reload`
+shutdown keeps displays too, since the same session continues. All
+other reasons (quit, new, resume) destroy them.
+
+For codex, whose hook set has no tool-level or fork events, a forked
+thread cannot reclaim the old thread's displays automatically. Resume
+the original thread (its `sessionId` still matches the owner) and call
+`lxh_display_reown` from there, or destroy the display and start fresh.
+
+## Identity details
+
+The session key is sticky per connection: an un-attributed request
+never strips it, only an explicit new identity may replace it. Displays
+created without any session envelope (older proxies, direct socket
+clients) have no owner and are reclaimed only by the connection that
+created them — never by another connection disconnecting.
+
 ## Codex
 
 `linux-x11-harness setup` registers the hook automatically: it merges a

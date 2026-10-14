@@ -41,10 +41,14 @@ launching GUI apps.
 
 ## Lifecycle
 
-Displays are destroyed when their session ends (client disconnect).
-Create what you need with `lxh_display_create`, and destroy displays
-you no longer need with `lxh_display_destroy` as the session goes —
-leftover displays are removed automatically at session end anyway.
+A display is bound to the agent session that created it — the session
+id your host attaches to every `lxh_*` call. Destroy displays you no
+longer need with `lxh_display_destroy`; leftovers are also reclaimed
+when the session's MCP client disconnects, and hook-equipped hosts (pi,
+opencode, codex) end sessions explicitly on /new, /fork or session
+deletion. To hand a display to a forked session instead of losing it,
+call `lxh_display_reown` with the new session id — only the current
+owner can reown a display.
 
 1. `lxh_list_displays` — see what already exists (skip create if reusable).
 2. `lxh_display_create` — creates the display and the preview panel.
