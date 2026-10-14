@@ -456,7 +456,12 @@ pub fn tool_definitions() -> Vec<Value> {
         ),
         tool_def(
             "lxh_input_key",
-            "Press a key or key combination",
+            "Press a key or key combination. Key names (case-insensitive): \
+             enter/return, esc/escape, tab, space, backspace, del/delete, \
+             ins/insert, home, end, pgup/pageup, pgdn/pagedown, \
+             up/down/left/right, f1-f12; modifiers: ctrl, alt, shift, super; \
+             or an exact X keysym name, or a single character. Unknown \
+             multi-character names are rejected (never typed as text).",
             root_schema::<KeyArgs>(),
         ),
         tool_def(

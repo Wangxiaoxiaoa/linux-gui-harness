@@ -48,6 +48,55 @@ pub mod raw {
         x11_keysymdef::lookup_by_name(name).map(|r| r.keysym)
     }
 
+    /// Documented vocabulary for `lxh_input_key` (see the tool description):
+    /// enter/return, esc/escape, tab, space, backspace, del/delete,
+    /// ins/insert, home, end, pgup/pageup, pgdn/pagedown, arrows, f1-f12,
+    /// and modifier names. Case-insensitive; returns the canonical X
+    /// keysym name to look up.
+    pub fn keysym_name_for(key: &str) -> Option<String> {
+        let k = key.trim();
+        if k.is_empty() {
+            return None;
+        }
+        // f1-f12 (also F1..F12 as typed)
+        if let Some(rest) = k.strip_prefix(['f', 'F']) {
+            if let Ok(n) = rest.parse::<u8>() {
+                if (1..=12).contains(&n) {
+                    return Some(format!("F{n}"));
+                }
+            }
+        }
+        let canonical = match k.to_ascii_lowercase().as_str() {
+            "enter" | "return" => "Return",
+            "esc" | "escape" => "Escape",
+            "tab" => "Tab",
+            "space" => "space",
+            "backspace" => "BackSpace",
+            "del" | "delete" => "Delete",
+            "ins" | "insert" => "Insert",
+            "home" => "Home",
+            "end" => "End",
+            "pgup" | "pageup" => "Prior",
+            "pgdn" | "pagedown" => "Next",
+            "up" => "Up",
+            "down" => "Down",
+            "left" => "Left",
+            "right" => "Right",
+            "ctrl" | "control" => "Control_L",
+            "alt" => "Alt_L",
+            "shift" => "Shift_L",
+            "super" | "win" => "Super_L",
+            // keep the original case: exact X keysym names (Page_Down, A,
+            // F1) are case-sensitive in the lookup
+            other => return Some(k.to_string()),
+        };
+        Some(canonical.to_string())
+    }
+
+    pub const KEY_VOCABULARY: &str = "enter/return, esc/escape, tab, space, backspace, del/delete, \
+ins/insert, home, end, pgup/pageup, pgdn/pagedown, up/down/left/right, f1-f12, \
+or an exact X keysym name, or a single character";
+
     /// The keysym produced by `keycode` at `level` (0 = base, 1 = shifted).
     pub fn keysym_at(mapping: &GetKeyboardMappingReply, keycode: u8, level: usize) -> Option<u32> {
         let per = mapping.keysyms_per_keycode as usize;
@@ -328,18 +377,39 @@ impl InputDriver for XtestInput {
             let (conn, _) = x11::open_connection(&display)?;
             let mapping = raw::get_mapping(&conn)?;
 
-            let keysym = raw::keysym_for_name(&key)
-                .or_else(|| raw::keysym_for_char(key.chars().next().unwrap_or('\0')))
-                .ok_or_else(|| LxhError::InvalidArgument(format!("unknown key: {}", key)))?;
+            // Documented vocabulary first; an exact X keysym name next; a
+            // single character last. Unknown multi-character names are an
+            // error — never silently type the first character.
+            let name = raw::keysym_name_for(&key).ok_or_else(|| {
+                LxhError::InvalidArgument(format!(
+                    "empty key name; valid: {}",
+                    raw::KEY_VOCABULARY
+                ))
+            })?;
+            let keysym = raw::keysym_for_name(&name).or_else(|| {
+                (key.chars().count() == 1)
+                    .then(|| raw::keysym_for_char(key.chars().next().unwrap_or('\0')))
+                    .flatten()
+            }).ok_or_else(|| {
+                LxhError::InvalidArgument(format!(
+                    "unknown key: {key}; valid: {}",
+                    raw::KEY_VOCABULARY
+                ))
+            })?;
             let (keycode, _) = raw::keycode_for_keysym(&mapping, keysym)
-                .ok_or_else(|| LxhError::InvalidArgument(format!("no keycode for key: {}", key)))?;
+                .ok_or_else(|| LxhError::InvalidArgument(format!("no keycode for key: {key}")))?;
 
             let mut codes = Vec::new();
             for m in &modifiers {
-                let mk = raw::keysym_for_name(m)
-                    .ok_or_else(|| LxhError::InvalidArgument(format!("unknown modifier: {}", m)))?;
+                let mname = raw::keysym_name_for(m).ok_or_else(|| {
+                    LxhError::InvalidArgument(format!("unknown modifier: {m}"))
+                })?;
+                let mk = raw::keysym_for_name(&mname)
+                    .ok_or_else(|| {
+                        LxhError::InvalidArgument(format!("unknown modifier: {m}"))
+                    })?;
                 let (mkc, _) = raw::keycode_for_keysym(&mapping, mk).ok_or_else(|| {
-                    LxhError::InvalidArgument(format!("no keycode for modifier: {}", m))
+                    LxhError::InvalidArgument(format!("no keycode for modifier: {m}"))
                 })?;
                 codes.push(mkc);
             }
@@ -505,6 +575,34 @@ mod tests {
         assert!(raw::keysym_for_name("Return").is_some());
         assert!(raw::keysym_for_name("Shift_L").is_some());
         assert!(raw::keysym_for_char('a').is_some());
+    }
+
+    #[test]
+    fn key_vocabulary_aliases() {
+        // case-insensitive aliases resolve to canonical X keysym names
+        assert_eq!(raw::keysym_name_for("ENTER").as_deref(), Some("Return"));
+        assert_eq!(raw::keysym_name_for("return").as_deref(), Some("Return"));
+        assert_eq!(raw::keysym_name_for("pagedown").as_deref(), Some("Next"));
+        assert_eq!(raw::keysym_name_for("PGDN").as_deref(), Some("Next"));
+        assert_eq!(raw::keysym_name_for("f12").as_deref(), Some("F12"));
+        assert_eq!(raw::keysym_name_for("ctrl").as_deref(), Some("Control_L"));
+        assert_eq!(raw::keysym_name_for("escape").as_deref(), Some("Escape"));
+    }
+
+    #[test]
+    fn pagedown_resolves_to_page_down_not_letter_p() {
+        // The old first-character fallback turned "pagedown" into "p".
+        let name = raw::keysym_name_for("pagedown").unwrap();
+        let keysym = raw::keysym_for_name(&name).unwrap();
+        assert_eq!(keysym, 0xff56, "Next keysym (XK_Page_Down)");
+        assert_ne!(keysym, 'p' as u32);
+    }
+
+    #[test]
+    fn unknown_key_names_stay_unknown() {
+        // no silent first-character fallback for multi-char names
+        let name = raw::keysym_name_for("pagedow").unwrap(); // not in the table
+        assert!(raw::keysym_for_name(&name).is_none());
     }
 
     #[test]
