@@ -370,7 +370,7 @@ async fn tools_list_returns_all_tools() {
     let mut conn = daemon.connect().await;
     let resp = conn.call_method("tools/list", json!({})).await;
     let tools = resp["result"]["tools"].as_array().expect("tools array");
-    assert_eq!(tools.len(), 36, "expected 36 tools");
+    assert_eq!(tools.len(), 37, "expected 37 tools");
 
     for tool in tools {
         assert!(tool["name"].is_string(), "tool missing name: {tool}");
@@ -448,6 +448,17 @@ async fn launch_app_and_take_screenshot() {
     let mut conn = daemon.connect().await;
     let create = conn.create_display().await;
     let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+
+    // Sticky identity: an un-attributed call on the same connection must
+    // not strip the session key — the un-attributed lxh_display_info
+    // still resolves against the key learned from the create above.
+    let sticky = conn
+        .call_tool("lxh_display_info", json!({"display_id": display_id}))
+        .await;
+    assert!(
+        sticky["result"].is_object(),
+        "un-attributed call must keep the connection's session key"
+    );
     let display = create["result"]["display"].as_str().unwrap().to_string();
     assert!(
         display_id.starts_with("d-") && display_id.len() == 34,
@@ -907,8 +918,11 @@ async fn session_id_binding_and_cross_session_guard() {
         "subagent thread of the same session must be allowed"
     );
 
-    // A thread id alone carries no identity: an owned display is off limits.
-    let thread_only = conn
+    // A thread id alone carries no identity: on a connection without any
+    // session envelope, an owned display is off limits. (On THIS connection
+    // the sticky key legitimately remembers s-main, so use a fresh one.)
+    let mut fresh = daemon.connect().await;
+    let thread_only = fresh
         .call_tool(
             "lxh_display_info",
             json!({"display_id": display_id,
@@ -984,6 +998,100 @@ async fn session_id_binding_and_cross_session_guard() {
             .iter()
             .any(|e| e["display_id"].as_str() == Some(pi_id.as_str())),
         "other sessions' displays must survive"
+    );
+}
+
+#[tokio::test]
+async fn reown_sticky_key_and_unowned_boundary() {
+    let daemon = DaemonGuard::new().await;
+    let mut conn = daemon.connect().await;
+
+    // reown: only the current owner may transfer a display.
+    let create = conn
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false, "_meta": {"sessionId": "s-owner"}}),
+        )
+        .await;
+    let display_id = create["result"]["display_id"].as_str().unwrap().to_string();
+
+    let wrong = conn
+        .call_tool(
+            "lxh_display_reown",
+            json!({"display_id": display_id, "to": "s-new",
+                   "_meta": {"sessionId": "s-not-owner"}}),
+        )
+        .await;
+    assert!(
+        wrong["error"].is_object(),
+        "reown from a non-owner must be rejected"
+    );
+
+    let reowned = conn
+        .call_tool(
+            "lxh_display_reown",
+            json!({"display_id": display_id, "to": "s-new",
+                   "_meta": {"sessionId": "s-owner"}}),
+        )
+        .await;
+    assert_eq!(
+        reowned["result"]["owner"].as_str(),
+        Some("s-new"),
+        "owner reown succeeds"
+    );
+
+    // The new owner can use the display; the old one cannot.
+    let by_new = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id, "_meta": {"sessionId": "s-new"}}),
+        )
+        .await;
+    assert!(by_new["result"].is_object(), "new owner has access");
+    let by_old = conn
+        .call_tool(
+            "lxh_display_info",
+            json!({"display_id": display_id, "_meta": {"sessionId": "s-owner"}}),
+        )
+        .await;
+    assert!(by_old["error"].is_object(), "old owner lost access");
+
+    // Unowned boundary: an unowned display may only be reclaimed by the
+    // connection that created it — another connection disconnecting (even
+    // with its own session envelope) must leave it alone.
+    let orphan = conn
+        .call_tool("lxh_display_create", json!({"preview": false}))
+        .await;
+    let orphan_id = orphan["result"]["display_id"].as_str().unwrap().to_string();
+
+    let mut other = daemon.connect().await; // second connection with its own envelope
+    let _their_display = other
+        .call_tool(
+            "lxh_display_create",
+            json!({"preview": false, "_meta": {"sessionId": "s-tmp"}}),
+        )
+        .await;
+    drop(other); // disconnect sweeps s-tmp only
+
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(orphan_id.as_str())),
+        "another connection disconnecting must not reclaim an unowned display"
+    );
+
+    // The creating connection can still end it explicitly (no envelope:
+    // lxh_session_end covers the connection's own unowned displays).
+    conn.call_tool("lxh_session_end", json!({})).await;
+    let list = conn.call_tool("lxh_list_displays", json!({})).await;
+    let entries = list["result"]["displays"].as_array().unwrap();
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e["display_id"].as_str() == Some(orphan_id.as_str())),
+        "lxh_session_end without envelope reclaims this connection's unowned displays"
     );
 }
 

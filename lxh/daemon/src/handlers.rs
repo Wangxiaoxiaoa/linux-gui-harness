@@ -46,6 +46,10 @@ pub struct ClientSession {
     /// on every call. Displays created through this session record it as
     /// their owner.
     pub session_key: Option<String>,
+    /// Displays created on this connection WITHOUT any session envelope.
+    /// They have no owner, so only the connection that created them may
+    /// reclaim them — another connection disconnecting must not.
+    pub created_unowned: Vec<String>,
 }
 
 impl Default for ClientSession {
@@ -59,6 +63,7 @@ impl ClientSession {
         Self {
             client_name: None,
             session_key: None,
+            created_unowned: Vec::new(),
         }
     }
 }
@@ -73,7 +78,7 @@ fn parse_button(b: Option<crate::tools::ButtonArg>) -> Result<MouseButton, LxhEr
 
 pub async fn create_display(
     state: &DaemonState,
-    session: &ClientSession,
+    session: &mut ClientSession,
     args: &Value,
 ) -> Result<Value, LxhError> {
     let args: DisplayCreateArgs = parse_args(args)?;
@@ -87,6 +92,8 @@ pub async fn create_display(
 
     if let Some(key) = &session.session_key {
         display.set_owner(key.clone());
+    } else {
+        session.created_unowned.push(id.clone());
     }
 
     if preview {
@@ -183,18 +190,18 @@ pub async fn ensure_display_owner(
     }
 }
 
-/// Destroy the harness displays owned by a client session, called when
-/// that session's connection closes. Displays owned by *other* sessions
-/// are left alone. Attached external displays are always left alone —
-/// they were not created here and outlive any single session.
+/// Destroy the harness displays a client session leaves behind, called
+/// when that session's connection closes (or via `lxh_session_end`).
+/// Displays owned by *other* sessions are left alone. Attached external
+/// displays are always left alone — they were not created here and
+/// outlive any single session.
 ///
 /// Unowned displays (created without a session envelope: an older proxy,
-/// or a direct socket client) are attributed to whichever connection is
-/// ending and destroyed with it. With multiple concurrent connections
-/// this can reclaim a display another connection is still using — known
-/// boundary, accepted: it only arises for envelope-less clients, and
-/// those are transient by nature (tests, manual debugging).
-pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&str>) {
+/// or a direct socket client) can only be reclaimed by the connection
+/// that created them — any other connection disconnecting must leave
+/// them alone.
+pub async fn destroy_session_displays(state: &DaemonState, session: &ClientSession) {
+    let session_key = session.session_key.as_deref();
     let mut ids = Vec::new();
     {
         let displays = state.displays.read().await;
@@ -203,13 +210,13 @@ pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&
             if display.is_external() {
                 continue;
             }
-            match (display.owner(), session_key) {
+            match display.owner() {
                 // Owned by this session.
-                (Some(owner), Some(key)) if owner == key => ids.push(id.clone()),
-                // Unowned display: no envelope, no other claimant — the
-                // ending connection takes it (see the boundary note above).
-                (None, _) => ids.push(id.clone()),
-                // Owned by a different (still-connected) session.
+                Some(owner) if session_key == Some(owner.as_str()) => ids.push(id.clone()),
+                // Unowned display created by this very connection.
+                None if session.created_unowned.contains(id) => ids.push(id.clone()),
+                // Owned by a different (still-connected) session, or
+                // unowned but created elsewhere — not ours to reclaim.
                 _ => {}
             }
         }
@@ -233,16 +240,42 @@ pub async fn destroy_session_displays(state: &DaemonState, session_key: Option<&
 }
 
 /// Explicit end-of-session request from the model or a host hook: destroy
-/// the harness displays owned by this session. Without a session key there
+/// the harness displays this session leaves behind — those it owns, plus
+/// any unowned displays it created on this connection. With neither, there
 /// is nothing to attribute — report that instead of guessing.
 pub async fn session_end(state: &DaemonState, session: &ClientSession) -> Result<Value, LxhError> {
-    let Some(key) = &session.session_key else {
+    if session.session_key.is_none() && session.created_unowned.is_empty() {
         return Err(LxhError::InvalidArgument(
             "no session identity available; nothing to end".into(),
         ));
-    };
-    destroy_session_displays(state, Some(key)).await;
+    }
+    destroy_session_displays(state, session).await;
     Ok(json!({ "success": true }))
+}
+
+/// Hand a display to another session (e.g. a forked one). Only the
+/// current owner may reown: the caller's session identity must match the
+/// display's owner, so the cross-session guard stays intact.
+pub async fn reown_display(
+    state: &DaemonState,
+    session: &ClientSession,
+    args: &Value,
+) -> Result<Value, LxhError> {
+    let args: crate::tools::ReownArgs = parse_args(args)?;
+    let display = find_display(state, &args.display_id).await?;
+    let owner = display.lock().await.owner();
+    match (&session.session_key, &owner) {
+        (Some(key), Some(owner_key)) if key == owner_key => {}
+        _ => {
+            return Err(LxhError::InvalidArgument(format!(
+                "reown requires the current owner's session identity (display {} is owned by {})",
+                args.display_id,
+                owner.as_deref().unwrap_or("<unowned>")
+            )))
+        }
+    }
+    display.lock().await.set_owner(args.to.clone());
+    Ok(json!({ "display_id": args.display_id, "owner": args.to }))
 }
 
 pub async fn destroy_display(state: &DaemonState, args: &Value) -> Result<Value, LxhError> {

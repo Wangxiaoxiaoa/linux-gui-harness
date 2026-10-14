@@ -28,6 +28,13 @@ pub struct DisplayIdArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReownArgs {
+    pub display_id: String,
+    /// Session id the display is transferred to (e.g. the forked session).
+    pub to: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct DesktopOverviewArgs {
     pub display_id: String,
     /// Only return windows of this process.
@@ -610,6 +617,13 @@ pub fn tool_definitions() -> Vec<Value> {
              also destroyed automatically when the session disconnects.",
             root_schema::<ListDisplaysArgs>(),
         ),
+        tool_def(
+            "lxh_display_reown",
+            "Transfer a display you own to another session id (e.g. hand it \
+             to a forked session so it can keep working with the same GUI). \
+             Only the current owner can reown a display.",
+            root_schema::<ReownArgs>(),
+        ),
     ]
 }
 
@@ -625,10 +639,11 @@ mod tests {
     #[test]
     fn tool_definitions_has_expected_tools() {
         let defs = tool_definitions();
-        assert_eq!(defs.len(), 36, "expected 36 tool definitions");
+        assert_eq!(defs.len(), 37, "expected 37 tool definitions");
 
         let names: Vec<&str> = defs.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"lxh_display_create"));
+        assert!(names.contains(&"lxh_display_reown"));
         assert!(names.contains(&"lxh_session_end"));
         assert!(names.contains(&"lxh_list_displays"));
         assert!(names.contains(&"lxh_list_apps"));

@@ -52,7 +52,7 @@ impl DaemonServer {
                 }
                 // The session is over: harness displays created through this
                 // connection are destroyed. Attached external displays survive.
-                handlers::destroy_session_displays(&state, session.session_key.as_deref()).await;
+                handlers::destroy_session_displays(&state, &session).await;
             });
         }
     }
@@ -106,7 +106,12 @@ async fn handle_client(
         };
 
         let is_notification = req.id.is_none();
-        session.session_key = session_key(&req.params);
+        // Sticky identity: an un-attributed request (e.g. lxh_list_displays
+        // from a hook-injected shell) must not strip the connection's
+        // session key — only an explicit new identity may replace it.
+        if let Some(key) = session_key(&req.params) {
+            session.session_key = Some(key);
+        }
         let resp = dispatch(&state, session, req).await;
         if is_notification {
             continue;
@@ -210,6 +215,7 @@ async fn dispatch_tool_call(
         "lxh_preview_open" => handlers::preview_open(state, session, args).await,
         "lxh_preview_close" => handlers::preview_close(state, args).await,
         "lxh_session_end" => handlers::session_end(state, session).await,
+        "lxh_display_reown" => handlers::reown_display(state, session, args).await,
         "lxh_invoke_menu" => handlers::invoke_menu(state, args).await,
         "lxh_verify_state" => handlers::verify_state(state, args).await,
         "lxh_get_window_state" => handlers::get_window_state(state, args).await,
