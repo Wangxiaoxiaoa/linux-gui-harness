@@ -479,8 +479,10 @@ async fn launch_app_and_take_screenshot() {
     );
 
     // Wait for openbox to map the window and update _NET_CLIENT_LIST_STACKING.
+    // 10s budget: the suite runs many Xvfb/x11vnc instances in parallel, so
+    // app launch + WM mapping can exceed 5s under load.
     let mut app_window_id: Option<u64> = None;
-    for _ in 0..20 {
+    for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(250)).await;
         let overview = conn
             .call_tool(
