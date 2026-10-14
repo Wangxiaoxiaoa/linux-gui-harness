@@ -92,6 +92,11 @@ Notable parameters:
 
 - `lxh_input_click` / `lxh_input_move` / `lxh_input_drag` accept `from_zoom: true` to interpret coordinates in the last `lxh_zoom` image instead of display coordinates.
 - `lxh_input_type` accepts an optional `pid` to enable AT-SPI text writing when the focused widget is not editable.
+- `lxh_get_window_state` accepts budgets for large applications: `max_elements`,
+  `max_depth`, `query` (server-side role/name substring filter) and
+  `max_image_dimension` (screenshot downscale). Truncation is reported as
+  `truncated: true` with `elements_total`.
+- `lxh_input_drag` accepts `modifiers` (e.g. ["shift"]) held for the whole gesture.
 - `lxh_click_element` / `lxh_set_value` accept an optional `identity` string (from `lxh_get_window_state` elements) for drift-proof targeting.
 - `lxh_get_desktop_overview` accepts `pid` and `on_screen_only` filters.
 
@@ -104,7 +109,17 @@ Notable parameters:
 {"method":"tools/call","params":{"name":"lxh_app_launch","arguments":{"display_id":"d-1","command":"gedit"}}}
 {"method":"tools/call","params":{"name":"lxh_input_type","arguments":{"display_id":"d-1","text":"Hello World"}}}
 {"method":"tools/call","params":{"name":"lxh_input_key","arguments":{"display_id":"d-1","key":"ctrl+s"}}}
-{"method":"tools/call","params":{"name":"lxh_verify_state","arguments":{"display_id":"d-1","pid":1234,"expect":[{"window":{"exists":true,"title_contains":"Hello World"}}]}}}
+// key names (case-insensitive): enter/return, esc/escape, tab, space, backspace, del/delete,
+// ins/insert, home, end, pgup/pageup, pgdn/pagedown, up/down/left/right, f1-f12,
+// or an exact X keysym name, or a single character. Unknown multi-character
+// names are rejected (never typed as text).
+{"method":"tools/call","params":{"name":"lxh_verify_state","arguments":{"display_id":"d-1","pid":1234,
+  "expect":[{"window":{"exists":true,"title_contains":"Hello World"}}],
+  "timeout_ms":15000,"stable_samples":2,"include_screenshot":true}}}
+// UI changes are asynchronous: timeout_ms keeps sampling until the predicates hold,
+// stable_samples requires the state to hold across consecutive samples, and
+// include_screenshot attaches the final screenshot. Verdict:
+// satisfied / unsatisfied / unknown(+reason).
 {"method":"tools/call","params":{"name":"lxh_display_destroy","arguments":{"display_id":"d-1"}}}
 ```
 
