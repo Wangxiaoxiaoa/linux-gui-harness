@@ -284,6 +284,96 @@ pub async fn create(id: String, config: DisplayConfig) -> Result<Self, LghError>
 | AT-SPI 树 | ✓ | △ 第一期实测 | 坐标空间 |
 | 宿主桌面枚举/接管 | ✓ | ✗ 类型化拒绝 | 宿主触达 |
 
+## 4.9 三个能力的详细设计（预览编排 / 交互 / 剪贴板）
+
+### 4.9.1 预览编排
+
+**现状**：PreviewPanel（daemon）+ PreviewContainer（X11 窗口 "LGH Previews"）
++ Cell（每沙盒一个 X 子窗口）。Cell 内部：独立 X 连接连沙盒 Xvfb →
+GetImage 每帧（100ms）→ put_image → hover 标题栏（core font "10x20"）+
+X 关闭按钮 → 双击检测（400ms）→ 交互视图。容器带分页栏。
+
+**Wayland 变更 = 只换帧源，编排零改动**：
+
+```rust
+// lgh/preview/src/frame.rs（新）
+pub enum FrameSource {
+    X11 { display: String },          // 现状：X11 连接 + GetImage
+    Grim { wayland_display: String }, // 新：每帧 spawn grim（wlr-screencopy）
+}
+impl FrameSource {
+    /// 返回 (w, h, BGRA)；失败 = None（组合器重启等）
+    pub fn grab(&self) -> Option<Frame>;
+}
+```
+
+- Cell 按 `display.backend` 持有 FrameSource；绘制/悬停/分页/双击逻辑
+  **零改动**（X11 GetImage 与 grim 都产出 BGRA，put_image 路径共用）
+- grim 帧源带 1.5s 超时 + 存活检查（应用退出后不抓残留帧——
+  cua d1c5a7a90 教训）
+- 编排行为全部保留：创建自动弹面板、2×4 分页、hover 标题栏、
+  关闭按钮销毁世界、双击进交互视图
+- 定位：EWMH `_NET_MOVERESIZE_WINDOW`（mutter 忽略普通 ConfigureWindow——
+  探针踩坑；OR 窗口 mutter 不渲染，必须用受管窗口）
+
+### 4.9.2 交互
+
+两条通道 × 两后端；通道选择对工具面透明：
+
+**AI 注入**（InputDriver，§4.2）：XTest / 虚拟指针+键盘。
+
+**用户交互视图**（on-demand，daemon/vnc.rs 一处分支）：
+
+| | X11 世界 | Wayland 世界 |
+|---|---|---|
+| 服务端 | x11vnc -display :N（现状） | wayvnc（WAYLAND_DISPLAY env，-o output） |
+| 端口分配 | 复用现有 picked-port 逻辑 | 同左 |
+| 剪贴板 | CutText | wayvnc 原生同步（wlr-data-control） |
+| 生命周期 | spawn on demand → 随世界销毁 | 同左 |
+
+**触发路径（两条）**：
+1. 用户双击 peephole 格子 → `lgh_display_enter`（现有机制）
+2. **AI 主动请求**：AI 遇到登录墙/授权弹窗时调用同一工具 → VNC 窗口
+   自动弹给用户（把"用户发现需要介入"变成"AI 主动求援"——
+   SKILL.md 写入使用约定即可，零代码）
+
+交互结束：用户关窗即止；AI 继续用注入通道，两者并行不冲突。
+
+### 4.9.3 剪贴板
+
+**现状（lxh）**：ClipboardHub（状态 + Condvar）+ Origin 标记
+（Desktop/Agent/沙盒）+ `set_if_changed` 策略 + 每显示 spoke 线程
+（X11 selection 轮询）+ desktop spoke（:0）。
+
+**统一抽象（新增 trait）**：
+
+```rust
+// lgh-core
+#[async_trait]
+pub trait ClipboardAccess: Send {
+    async fn read(&self) -> Option<String>;   // None = 无变化/不可用
+    async fn write(&self, text: &str) -> Result<(), LghError>;
+}
+// X11ClipboardAccess：现有 X11 selection 逻辑（desktop spoke 复用）
+// WaylandClipboardAccess：wl-paste --no-newline / wl-copy 子进程
+//   （wlr-data-control，WAYLAND_DISPLAY env）
+```
+
+- hub 规则 **1:1 移植**：origin 标记、`set_if_changed`、
+  "沙盒来源不覆盖宿主、宿主来源广播到各沙盒"——策略与协议无关
+- Wayland 优势：sway 沙盒内无剪贴板守护进程（dde 竞态不存在）；
+  wlr-data-control 是同步状态存储模型（无 X11 所有权协商）
+- 轮询：wlr-data-control 无变更通知 → spoke 以 500ms–1s 轮询
+  （文档化；远期可挂持久 data-control 连接）
+
+**方向/策略表**：
+
+| 来源 | 目标 | 策略 |
+|---|---|---|
+| 沙盒 → 宿主 | 默认不覆盖宿主剪贴板（用户主动粘贴才生效） | lxh 规则保留 |
+| 宿主 → 沙盒 | 广播 | |
+| 沙盒 → 沙盒 | 经 hub（默认关闭，保持世界隔离） | |
+
 ## 5. 工具面变化（回答"是否需要新增工具"）
 
 **不新增任何 MCP 工具。** 唯一 API 变化：`lgh_display_create` 的可选
