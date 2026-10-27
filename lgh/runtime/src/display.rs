@@ -12,11 +12,24 @@ pub enum DisplayKind {
     External,
 }
 
+/// Which display-service stack a sandbox world runs on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backend {
+    /// Xvfb + openbox (X11 protocol). The original sandbox.
+    #[default]
+    Xvfb,
+    /// sway headless (Wayland protocol, invisible).
+    SwayHeadless,
+    /// sway wayland backend (Wayland protocol, native window on the host).
+    SwayNested,
+}
+
 #[derive(Clone)]
 pub struct DisplayConfig {
     pub width: u32,
     pub height: u32,
     pub depth: u32,
+    pub backend: Backend,
 }
 
 impl Default for DisplayConfig {
@@ -25,6 +38,7 @@ impl Default for DisplayConfig {
             width: 1280,
             height: 800,
             depth: 24,
+            backend: Backend::Xvfb,
         }
     }
 }
@@ -33,9 +47,10 @@ pub struct Display {
     id: String,
     display: String,
     kind: DisplayKind,
+    backend: Backend,
     width: u32,
     height: u32,
-    xserver: Option<ManagedProcess>,
+    compositor: Option<ManagedProcess>,
     wm: Option<ManagedProcess>,
     apps: std::sync::Mutex<Vec<ManagedProcess>>,
     driver: Arc<DefaultDriver>,
@@ -45,12 +60,12 @@ pub struct Display {
 }
 
 impl Display {
-    pub async fn create(
+    pub async fn create_xvfb(
         id: String,
         display: String,
         config: DisplayConfig,
     ) -> Result<Self, LghError> {
-        let xserver =
+        let compositor =
             XvfbBackend::start(&display, config.width, config.height, config.depth).await?;
 
         let wm = OpenboxWM::start(&display).await?;
@@ -61,14 +76,23 @@ impl Display {
             id,
             display: display.clone(),
             kind: DisplayKind::Harness,
+            backend: config.backend,
             width: config.width,
             height: config.height,
-            xserver: Some(xserver),
+            compositor: Some(compositor),
             wm: Some(wm),
             apps: std::sync::Mutex::new(Vec::new()),
             driver,
             owner: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Wayland 世界：sway 组合器 + 沙盒内应用（S3 实现 sway 编排）。
+    pub async fn create_wayland(
+        id: String,
+        config: DisplayConfig,
+    ) -> Result<Self, LghError> {
+        Err(LghError::NotSupported)
     }
 
     pub async fn attach(id: String, display: String) -> Result<Self, LghError> {
@@ -78,9 +102,10 @@ impl Display {
             id,
             display: display.clone(),
             kind: DisplayKind::External,
+            backend: Backend::Xvfb,
             width: 0,
             height: 0,
-            xserver: None,
+            compositor: None,
             wm: None,
             apps: std::sync::Mutex::new(Vec::new()),
             driver,
@@ -114,7 +139,13 @@ impl Display {
     }
 
     pub async fn launch_app(&self, command: &str, args: &[&str]) -> Result<u32, LghError> {
-        let proc = ManagedProcess::spawn(command, args, &[("DISPLAY", &self.display)]).await?;
+        let env: &[(&str, &str)] = match self.backend {
+            Backend::Xvfb => &[("DISPLAY", &self.display)],
+            // Wayland 世界：主显示是沙盒自己的 socket；沙盒内 XWayland
+            // 服务 X11 应用（:M 为探测到的沙盒显示号）。
+            _ => &[("WAYLAND_DISPLAY", &self.display)],
+        };
+        let proc = ManagedProcess::spawn(command, args, env).await?;
         let pid = proc.pid();
         self.apps.lock().unwrap().push(proc);
         Ok(pid)
@@ -164,8 +195,8 @@ impl Display {
         if let Some(ref mut wm) = self.wm {
             let _ = wm.kill().await;
         }
-        if let Some(ref mut xserver) = self.xserver {
-            let _ = xserver.kill().await;
+        if let Some(ref mut compositor) = self.compositor {
+            let _ = compositor.kill().await;
         }
         Ok(())
     }

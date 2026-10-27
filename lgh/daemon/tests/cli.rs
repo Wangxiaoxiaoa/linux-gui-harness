@@ -1,11 +1,14 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn bin_path() -> PathBuf {
     env::var("CARGO_BIN_EXE_linux-gui-harness")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("target/debug/linux-gui-harness"))
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/linux-gui-harness")
+        })
 }
 
 #[test]

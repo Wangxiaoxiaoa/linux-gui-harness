@@ -12,7 +12,7 @@ pub mod process;
 pub mod wm;
 pub mod xserver;
 
-pub use display::{Display, DisplayConfig, DisplayKind};
+pub use display::{Backend, Display, DisplayConfig, DisplayKind};
 pub use process::ManagedProcess;
 
 fn process_scoped_display_start() -> u32 {
@@ -51,10 +51,19 @@ impl Runtime {
     }
 
     pub async fn create_display(&self, config: DisplayConfig) -> Result<Display, LghError> {
-        let num = self.next_display.fetch_add(1, Ordering::Relaxed);
         let id = format!("d-{}", Uuid::new_v4().simple());
-        let display = format!(":{}", num);
-        let display = Display::create(id, display, config).await?;
+        let display = match config.backend {
+            // The :N display number is an X11 concept; Wayland worlds get
+            // their socket name probed from the compositor itself.
+            Backend::Xvfb => {
+                let num = self.next_display.fetch_add(1, Ordering::Relaxed);
+                let display = format!(":{}", num);
+                Display::create_xvfb(id, display, config).await?
+            }
+            Backend::SwayHeadless | Backend::SwayNested => {
+                Display::create_wayland(id, config).await?
+            }
+        };
         // SDK-created displays join the shared clipboard by default.
         self.ensure_desktop_spoke();
         self.clipboard.start_spoke(display.display());
@@ -98,6 +107,7 @@ mod tests {
                 width: 400,
                 height: 300,
                 depth: 24,
+                backend: Default::default(),
             })
             .await
             .expect("create display");

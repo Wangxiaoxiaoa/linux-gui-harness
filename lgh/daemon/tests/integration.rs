@@ -1,5 +1,5 @@
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -15,7 +15,10 @@ static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 fn bin_path() -> PathBuf {
     env::var("CARGO_BIN_EXE_linux-gui-harness")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("target/debug/linux-gui-harness"))
+        .unwrap_or_else(|_| {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../target/debug/linux-gui-harness")
+        })
 }
 
 fn pid_file_for(socket: &std::path::Path) -> PathBuf {
