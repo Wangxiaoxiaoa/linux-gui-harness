@@ -7,6 +7,7 @@ use lgh_core::LghError;
 use uuid::Uuid;
 
 pub mod clipboard;
+pub mod compositor;
 pub mod display;
 pub mod process;
 pub mod wm;

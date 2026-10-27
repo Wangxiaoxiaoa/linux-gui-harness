@@ -232,6 +232,7 @@ impl ClipboardHub {
 struct SpokeAtoms {
     clipboard: u32,
     targets: u32,
+    string: u32,
     utf8_string: u32,
     data_prop: u32,
 }
@@ -248,6 +249,7 @@ fn intern_atoms(conn: &x11rb::rust_connection::RustConnection) -> Option<SpokeAt
     Some(SpokeAtoms {
         clipboard: intern(b"CLIPBOARD")?,
         targets: intern(b"TARGETS")?,
+        string: intern(b"STRING")?,
         utf8_string: intern(b"UTF8_STRING")?,
         data_prop: intern(b"LGH_CLIPBOARD_DATA")?,
     })
@@ -325,10 +327,10 @@ fn run_spoke(hub: Arc<ClipboardHub>, display: String, desktop: bool, stop: Arc<A
                             req.requestor,
                             property,
                             AtomEnum::ATOM,
-                            &[atoms.targets, atoms.utf8_string, AtomEnum::STRING.into()],
+                            &[atoms.targets, atoms.utf8_string, atoms.string],
                         );
                     } else if req.target == atoms.utf8_string
-                        || req.target == AtomEnum::STRING.into()
+                        || req.target == atoms.string
                     {
                         let text = if desktop { &serving } else { &hub.get() };
                         let _ = conn.change_property8(
