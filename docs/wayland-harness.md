@@ -76,6 +76,40 @@ lgh-daemon（MCP 层，零改动）
 | 交互视图 | x11vnc | wayvnc（daemon/vnc.rs 一处分支） |
 | 预览帧源 | X11 GetImage | grim（lgh/preview 一处数据源分支） |
 
+## 3.5 统一原则（松耦合的不变量）
+
+工具层**零协议分支**是本设计的核心不变量，配套三条结构性统一：
+
+1. **工具层只认 trait**：`lgh-daemon` 的所有工具 handler 只经由
+   `lgh-core` 的驱动 trait（Input/Capture/Window/A11y/Clipboard）分派，
+   出现任何 `match backend` 即视为架构违规。以一个编译期/测试期检查固化
+   （grep 守卫进入 CI）。
+2. **剪贴板升格为 trait**：现有 `runtime/clipboard.rs` 的 hub 逻辑拆为
+   `ClipboardDriver` trait——X11 spoke（xclip 经 ：0）与 Wayland spoke
+   （wl-copy/wl-paste 经 wlr-data-control）各为一份实现；hub 规则
+   （origin 过滤/方向策略）是纯逻辑，与协议无关，整体保留。
+3. **预览帧源 trait**：`lgh-preview` 的 cell 经 `FrameSource` trait 取帧
+   （X11 GetImage | grim 子进程），面板布局/悬停/分页逻辑与帧源完全解耦。
+
+交互（AI 注入 vs 用户原生输入）同样统一：两种后端下 AI 都走虚拟设备
+协议，用户走宿主路由——驱动层内差异，工具层无感知。
+
+### cua 近期 Linux 提交的可借鉴清单（2025-08 之后）
+
+逐条对应到本设计的落点：
+
+| cua 提交 | 教训 | 本设计落点 |
+|---|---|---|
+| 8c515ca74 AT-SPI walk 按窗口收敛 | AT-SPI 每进程一棵树，多窗口应用全量暴露；必须按请求窗口过滤 | A11yDriver 的树查询加 window 过滤参数（两协议共用） |
+| ee77164b2 AT-SPI action 按 name 选择 | 按索引/位置选 action 在 UI 更新后漂移 | `lgh_click_element`/`invoke_menu` 坚持 name/identity 寻址（已有 identity 机制，固化为契约） |
+| d86e49ba4 选择正确的 AT-SPI 应用树 | 多应用场景下先选对 application 节点 | A11yDriver 查询前置应用解析 |
+| 669c91778 native Wayland 修饰键保持 | 修饰键必须与按键组成 chord 一次性发送，单独丢弃会静默变字符 | Wayland 键盘实现的验收用例（modifiers+key 同批次） |
+| c78c1d873 拒绝未证实的 Wayland 窗口捕获 | 无法证明像素归属目标表面时 fail closed | 沙盒内 grim 全屏捕获天然自证（自有组合器）；保留"精确拒绝"契约 |
+| d1c5a7a90 应用退出后有界快照 | 应用退出后不得再抓其残留帧 | capture 路径加存活检查（两协议共用） |
+| 5448c449c MIT-SHM 加速 X11 捕获 | X11 捕获性能路线 | X11 后端可选优化；Wayland 对应=持久 screencopy 连接（远期） |
+| fb4b492cd .desktop 解析 launch_app | 应用名经 .desktop 条目解析 + xdg-open 失败要显式化 | lgh_app_launch 的名称解析（list_apps 已合并 .desktop，补 spawn 路径） |
+| f91d78e49 收割 launch_app 子进程 | spawn 后不 wait 即僵尸 | 已实现（收尸线程）✓ |
+
 ## 4. 模块设计
 
 ### 4.1 `lgh-runtime/src/compositor/`（进程编排，不依赖 wayland-client）
@@ -180,7 +214,8 @@ lgh-wayland/src/
 - `lgh-runtime/compositor/sway.rs`（headless）
 - daemon/vnc.rs、lgh/preview 的分支接线
 - 验收：现有测试全绿（X11 零回归）；Wayland 冒烟等价探针
-  （create → launch → click → type → capture → destroy 全通过）
+  （create → launch → click → type → capture → destroy 全通过）；
+  modifiers chord 用例（cua 669c91778 教训）；trait-only 守卫测试
 
 ### 第二期：wayland-nested + 剪贴板
 
