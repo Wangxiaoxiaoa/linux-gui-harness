@@ -30,7 +30,7 @@ X11 路径零改动。
 
 ## 3. 架构总览（松耦合三道墙）
 
-### 墙 1：工具面零变化
+### 墙 1：工具签名零变化，但语义差异显式管理
 
 不新增任何 MCP 工具。唯一 API 变化：
 
@@ -42,8 +42,20 @@ lgh_display_create 加可选参数 backend:
   | "auto"（宿主有 Wayland 会话 → wayland-nested；否则 wayland-headless）
 ```
 
-`lgh_display_info` / `lgh_list_displays` 返回值增加 `backend` 字段（信息性）。
-其余 36 个工具语义不变，由驱动层按 backend 分派。
+`lgh_display_info` / `lgh_list_displays` 返回值增加 `backend` 字段。
+
+**诚实的边界**（cua 的 31 处 is_wayland 分支证明）：工具**签名**可以统一，
+但部分工具的**语义**在两协议下不同，无法完全藏进驱动实现。差异清单：
+
+| 工具 | X11 语义 | Wayland 语义 | 策略 |
+|---|---|---|---|
+| capture_window | 窗口自有内容，被遮挡也能抓 | 只能抓合成后的可见区域（遮挡包含） | 沙盒内 sway IPC 几何权威 + 被遮挡时精确拒绝 |
+| get_cursor_position | XQueryPointer 查询 | 无查询协议，驱动自追踪注入状态 | 语义一致，机制不同 |
+| get_window_state（AT-SPI 坐标） | X11 屏幕坐标 | 依组合器而异（mutter 上 Screen 坐标全为 0，需辅助） | 按组合器实测，坐标空间文档化 |
+| list_user_windows / display_attach | 可枚举/接管宿主桌面 | 协议禁止 | Wayland 宿主上类型化拒绝 |
+
+统一的是**签名**；分叉的**语义**收敛到驱动实现与能力矩阵（§4.2），
+不在工具层 if/else。
 
 ### 墙 2：代码隔离——新增 crate `lgh-wayland`
 
@@ -136,7 +148,48 @@ compositor/
 5. IPC socket：`sway-ipc.<uid>.<pid>.sock`（注意含 uid——探针踩坑）
 6. 生命周期：SIGTERM-first、收尸线程（复用 ManagedProcess）
 
-### 4.2 `lgh-wayland` crate（协议客户端，实现 lgh-core traits）
+### 4.2 驱动层：按协议分模块 + 显式能力矩阵（cua 的结构）
+
+**修正**：此前假设"一个 WaylandDriver 实现与 X11 相同的四个 trait 即可"。
+cua 的实践（platform-linux 内 31 处 is_wayland 分支、x11/ 与 wayland/
+平行模块树）证明：语义差异大到必须按协议组织实现——统一的只有 trait
+签名与能力契约。
+
+```
+lgh-wayland/src/
+├── lib.rs           // WaylandDriver：实现 Input/Capture/WindowDriver
+├── pointer.rs       // zwlr_virtual_pointer_v1 会话（绝对坐标/拖拽保连）
+├── keyboard.rs      // wtype 封装（外部二进制）
+├── capture.rs       // grim 封装（外部二进制）
+└── toplevels.rs     // sway IPC：窗口枚举/激活/关闭
+```
+
+与 X11 驱动的语义差异（驱动层内消化，工具签名不变）：
+
+- **screenshot_window**：X11 可抓被遮挡窗口的自有内容；Wayland 只能裁剪
+  合成后的可见区域。被遮挡时**精确拒绝**（cua c78c1d873 同款 fail-closed）
+- **get_cursor_position**：X11 查询服务器；Wayland 由驱动自追踪注入状态
+- **AT-SPI 坐标空间**：按组合器实测并文档化（sway headless 待验证）
+- **modifiers**：修饰键与按键组成同批 chord（cua 669c91778 教训，
+  进验收用例）
+- **已知竞态**：指针/键盘操作后 250ms settle（wtype 新连接的 keymap
+  竞态会丢首键——探针实测 "12+34"→"2+34"）
+
+### 4.2.1 能力矩阵（action-support 式验收表的骨架）
+
+| 能力 | X11 (Xvfb) | Wayland (sway headless) | 备注 |
+|---|---|---|---|
+| 全屏截图 | ✓ XGetImage | ✓ grim | |
+| 窗口截图（含被遮挡） | ✓ | **✗ 精确拒绝** | 像素归属语义不同 |
+| 点击/拖拽/滚轮 | ✓ XTest | ✓ virtual pointer | |
+| 文本输入 | ✓ wtype | ✓ wtype | 首键竞态已缓解 |
+| 修饰键组合 | ✓ | ✓ chord（待验收） | cua 669c91778 |
+| 窗口枚举 | ✓ XQueryTree | ✓ sway IPC | id 空间不同，令牌化 |
+| 被遮挡窗口聚焦 | ✓ | ✓ sway IPC | 组合器权威 |
+| AT-SPI 树 | ✓ | ✓ 待验证（坐标空间实测） | |
+| 宿主桌面枚举/接管 | ✓（:0 同协议） | **✗ 类型化拒绝** | 宿主触达能力 |
+
+### 4.2.2 原 4.2 小节（lgh-wayland crate 结构）
 
 ```
 lgh-wayland/src/
