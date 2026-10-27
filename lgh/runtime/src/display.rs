@@ -53,7 +53,7 @@ pub struct Display {
     compositor: Option<ManagedProcess>,
     wm: Option<ManagedProcess>,
     apps: std::sync::Mutex<Vec<ManagedProcess>>,
-    driver: Arc<DefaultDriver>,
+    driver: Arc<dyn lgh_core::Driver>,
     /// Identity of the session that created this display, set by the
     /// daemon right after creation. `None` for attached external displays.
     owner: std::sync::Mutex<Option<String>>,
@@ -70,7 +70,7 @@ impl Display {
 
         let wm = OpenboxWM::start(&display).await?;
 
-        let driver = Arc::new(DefaultDriver::new(&display)?);
+        let driver: Arc<dyn lgh_core::Driver> = Arc::new(DefaultDriver::new(&display)?);
 
         Ok(Self {
             id,
@@ -87,16 +87,43 @@ impl Display {
         })
     }
 
-    /// Wayland 世界：sway 组合器 + 沙盒内应用（S3 实现 sway 编排）。
+    /// Wayland 世界：sway 组合器 + 沙盒内应用。
     pub async fn create_wayland(
         id: String,
         config: DisplayConfig,
     ) -> Result<Self, LghError> {
-        Err(LghError::NotSupported)
+        let sway_mode = match config.backend {
+            Backend::SwayNested => crate::compositor::sway::SwayMode::Nested,
+            _ => crate::compositor::sway::SwayMode::Headless,
+        };
+        let (compositor, handle) =
+            crate::compositor::sway::start(&id, sway_mode, config.width, config.height).await?;
+
+        let driver = Arc::new(lgh_wayland::WaylandDriver::new(
+            handle.wayland_display.clone(),
+            handle.ipc.clone(),
+            handle.output.clone(),
+            config.width,
+            config.height,
+        ));
+
+        Ok(Self {
+            id,
+            display: handle.wayland_display.clone(),
+            kind: DisplayKind::Harness,
+            backend: config.backend,
+            width: config.width,
+            height: config.height,
+            compositor: Some(compositor),
+            wm: None,
+            apps: std::sync::Mutex::new(Vec::new()),
+            driver,
+            owner: std::sync::Mutex::new(None),
+        })
     }
 
     pub async fn attach(id: String, display: String) -> Result<Self, LghError> {
-        let driver = Arc::new(DefaultDriver::new(&display)?);
+        let driver: Arc<dyn lgh_core::Driver> = Arc::new(DefaultDriver::new(&display)?);
 
         Ok(Self {
             id,
@@ -166,8 +193,8 @@ impl Display {
     /// Access the automation driver for this display. Provides the full
     /// SDK surface: click, type, screenshot, AT-SPI, window management,
     /// clipboard, etc.
-    pub fn driver(&self) -> &DefaultDriver {
-        &self.driver
+    pub fn driver(&self) -> &dyn lgh_core::Driver {
+        &*self.driver
     }
 
     pub fn info(&self) -> DisplayInfo {

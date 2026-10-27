@@ -27,6 +27,7 @@ lgh-core = { path = "lgh/core" }
 lgh-action = { path = "lgh/action" }
 lgh-state = { path = "lgh/state" }
 lgh-driver = { path = "lgh/driver" }
+lgh-wayland = { path = "lgh/wayland" }
 lgh-runtime = { path = "lgh/runtime" }
 lgh-preview = { path = "lgh/preview" }
 lgh-daemon = { path = "lgh/daemon" }
