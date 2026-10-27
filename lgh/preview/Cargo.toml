@@ -1,0 +1,12 @@
+[package]
+name = "lgh-preview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lgh-core = { workspace = true }
+lgh-action = { workspace = true }
+image = { workspace = true }
+tokio = { workspace = true }
+x11rb = { workspace = true }

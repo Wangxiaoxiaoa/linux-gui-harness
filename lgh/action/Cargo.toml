@@ -1,0 +1,12 @@
+[package]
+name = "lgh-action"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lgh-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+x11rb = { workspace = true }
+x11-keysymdef = { workspace = true }

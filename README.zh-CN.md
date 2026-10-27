@@ -1,10 +1,10 @@
 <div align="center">
 
-# linux-x11-harness
+# linux-gui-harness
 
 **为 AI 智能体提供隔离的 Linux X11 GUI 运行环境。**
 
-[![CI](https://github.com/Wangxiaoxiaoa/linux-x11-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangxiaoxiaoa/linux-x11-harness/actions/workflows/ci.yml)
+[![CI](https://github.com/Wangxiaoxiaoa/linux-gui-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangxiaoxiaoa/linux-gui-harness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · [中文](README.zh-CN.md)
@@ -15,7 +15,7 @@
 
 ## 这是什么？
 
-`linux-x11-harness` 可以创建隔离的 X11 显示环境，并让 AI 智能体控制 GUI 应用。每个显示环境都有独立的 X 服务器、窗口管理器和应用进程组，因此智能体可以点击、输入、截图、读取无障碍树，而不会影响宿主桌面。
+`linux-gui-harness` 可以创建隔离的 X11 显示环境，并让 AI 智能体控制 GUI 应用。每个显示环境都有独立的 X 服务器、窗口管理器和应用进程组，因此智能体可以点击、输入、截图、读取无障碍树，而不会影响宿主桌面。
 
 智能体工作时，桌面上会自动打开实时预览面板，让你看到它的每次点击和截图。预览默认只读；双击某个预览窗口可放大为可交互视图，直接用你的鼠标和键盘操控沙箱中的应用。
 
@@ -32,8 +32,8 @@
 一条命令完成安装并向各智能体注册：
 
 ```bash
-pip install linux-x11-harness
-linux-x11-harness setup
+pip install linux-gui-harness
+linux-gui-harness setup
 ```
 
 安装完成后，直接打开智能体并让它操作 GUI 应用即可。智能体需要时会自动启动 harness。
@@ -42,7 +42,7 @@ linux-x11-harness setup
 
 ## 支持的智能体
 
-`linux-x11-harness setup` 会在智能体支持的情况下，自动注册 MCP server、Agent skill 和会话结束钩子。display 的生命周期与所属会话绑定：会话结束时自动销毁。
+`linux-gui-harness setup` 会在智能体支持的情况下，自动注册 MCP server、Agent skill 和会话结束钩子。display 的生命周期与所属会话绑定：会话结束时自动销毁。
 
 | 智能体 | MCP server | Agent skill | 会话结束钩子 |
 |---|---|---|---|
@@ -50,12 +50,12 @@ linux-x11-harness setup
 | [OpenCode](https://opencode.ai/) | ✅ | — | —（断开清理） |
 | [Pi](https://pi.ai/) | ✅ | ✅ | —（断开清理） |
 
-其他兼容 MCP 的智能体可以手动通过 `linux-x11-harness mcp` 连接。
+其他兼容 MCP 的智能体可以手动通过 `linux-gui-harness mcp` 连接。
 
 ## 文档
 
 - [使用指南](docs/usage.md) — 显示预览、socket 与多智能体隔离。
-- [智能体技能](skills/linux-x11-harness/SKILL.md) — 给智能体的快速参考。
+- [智能体技能](skills/linux-gui-harness/SKILL.md) — 给智能体的快速参考。
 - [架构说明](docs/ARCHITECTURE.md) — crate 结构和设计说明。
 
 ## 许可证

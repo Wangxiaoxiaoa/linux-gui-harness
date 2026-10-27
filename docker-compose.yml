@@ -1,8 +1,8 @@
 services:
-  linux-x11-harness:
+  linux-gui-harness:
     build: .
-    container_name: linux-x11-harness
-    # Run the long-lived daemon; agents exec in with `linux-x11-harness mcp`.
+    container_name: linux-gui-harness
+    # Run the long-lived daemon; agents exec in with `linux-gui-harness mcp`.
     command: ["serve"]
     environment:
       - DISPLAY=:99

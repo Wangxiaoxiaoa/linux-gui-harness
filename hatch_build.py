@@ -8,11 +8,11 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
 
 class CustomBuildHook(BuildHookInterface):
-    """Build the linux-x11-harness Rust binary and copy it into the package."""
+    """Build the linux-gui-harness Rust binary and copy it into the package."""
 
     def initialize(self, version: str, build_data: dict) -> None:
         project_root = Path(self.root).resolve()
-        binary_name = "linux-x11-harness"
+        binary_name = "linux-gui-harness"
 
         subprocess.run(
             ["cargo", "build", "--release"],
@@ -24,7 +24,7 @@ class CustomBuildHook(BuildHookInterface):
         if not src.exists():
             raise RuntimeError(f"Built binary not found: {src}")
 
-        pkg_dir = project_root / "python" / "src" / "linux_x11_harness"
+        pkg_dir = project_root / "python" / "src" / "linux_gui_harness"
         bin_dir = pkg_dir / "bin"
         bin_dir.mkdir(parents=True, exist_ok=True)
         dst = bin_dir / binary_name
@@ -32,7 +32,7 @@ class CustomBuildHook(BuildHookInterface):
         shutil.copy2(src, dst)
         dst.chmod(0o755)
 
-        skill_src = project_root / "skills" / "linux-x11-harness"
+        skill_src = project_root / "skills" / "linux-gui-harness"
         skill_dst = pkg_dir / "skill"
         if skill_dst.exists():
             shutil.rmtree(skill_dst)

@@ -5,18 +5,18 @@ display ownership is keyed by the host's official session id (codex's
 `sessionId`, pi's `getSessionId()`, opencode's `sessionID`), carried on
 every tool call. When the session ends, every display it created is
 destroyed — automatically when the MCP client connection closes, or
-explicitly via `lxh_session_end`. Attached external displays are never
+explicitly via `lgh_session_end`. Attached external displays are never
 destroyed automatically.
 
 Hosts with lifecycle hooks can end a session explicitly instead of
-waiting for the disconnect. `lxh_session_end` destroys every harness
+waiting for the disconnect. `lgh_session_end` destroys every harness
 display owned by the calling session. It is safe to call at any point in
 a session; calling it twice is a no-op the second time.
 
 ## Fork inheritance and reown
 
 `/fork` and `/clone` create a new session id, which would leave the
-display bound to the old one. `lxh_display_reown` transfers a display
+display bound to the old one. `lgh_display_reown` transfers a display
 to another session id; only the display's current owner may call it
 (the caller's session identity must match), so the cross-session guard
 stays intact.
@@ -31,7 +31,7 @@ other reasons (quit, new, resume) destroy them.
 For codex, whose hook set has no tool-level or fork events, a forked
 thread cannot reclaim the old thread's displays automatically. Resume
 the original thread (its `sessionId` still matches the owner) and call
-`lxh_display_reown` from there, or destroy the display and start fresh.
+`lgh_display_reown` from there, or destroy the display and start fresh.
 
 ## Identity details
 
@@ -43,9 +43,9 @@ created them — never by another connection disconnecting.
 
 ## Codex
 
-`linux-x11-harness setup` registers the hook automatically: it merges a
+`linux-gui-harness setup` registers the hook automatically: it merges a
 `session_end` entry into `~/.codex/hooks.json` whose `mcp_tool` handler
-calls the lxh MCP server directly — no script needed. Manual setup, if
+calls the lgh MCP server directly — no script needed. Manual setup, if
 you prefer, is the same shape in `hooks.toml` (or shipped inside a
 plugin):
 
@@ -53,8 +53,8 @@ plugin):
 [hooks.session_end]
 [[hooks.session_end.handlers]]
 type = "mcp_tool"
-server = "linux-x11-harness"
-tool = "lxh_session_end"
+server = "linux-gui-harness"
+tool = "lgh_session_end"
 ```
 
 With this in place, ending a Codex session destroys its displays the
@@ -69,10 +69,10 @@ are ignored — the harness binds displays to session ids only.
 
 ## pi
 
-`linux-x11-harness setup` writes the `mcpServers` entry into
+`linux-gui-harness setup` writes the `mcpServers` entry into
 `~/.pi/agent/mcp.json` and installs a small extension
-(`~/.pi/agent/extensions/lxh-lifecycle.ts`) whose `tool_call` hook
-injects the session id into every `lxh_*` call, so displays bind to pi's
+(`~/.pi/agent/extensions/lgh-lifecycle.ts`) whose `tool_call` hook
+injects the session id into every `lgh_*` call, so displays bind to pi's
 official session id. Its `session_shutdown` hook — pi fires it on quit,
 reload, and in-process session switches (`/new`, `/fork`, `/clone`,
 `/resume`) — ends the session explicitly over the daemon socket.

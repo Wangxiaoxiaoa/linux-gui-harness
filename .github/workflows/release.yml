@@ -35,7 +35,7 @@ jobs:
 
       - name: Retag wheel to the binary's actual glibc requirement
         run: |
-          MAX=$(objdump -T target/release/linux-x11-harness \
+          MAX=$(objdump -T target/release/linux-gui-harness \
             | grep -oE 'GLIBC_[0-9.]+' | sort -uV | tail -1 | cut -d_ -f2)
           MAX=${MAX//./_}   # GLIBC_2.34 -> manylinux_2_34 (PEP 600 uses underscores)
           echo "binary requires glibc >= ${MAX//_/.}"
@@ -49,15 +49,15 @@ jobs:
 
       - name: Bundle standalone binary
         run: |
-          mkdir -p bundle/linux-x11-harness
-          cp target/release/linux-x11-harness bundle/linux-x11-harness/
-          cp -r skills/linux-x11-harness bundle/linux-x11-harness/skill
-          tar -czf "linux-x11-harness-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" -C bundle .
+          mkdir -p bundle/linux-gui-harness
+          cp target/release/linux-gui-harness bundle/linux-gui-harness/
+          cp -r skills/linux-gui-harness bundle/linux-gui-harness/skill
+          tar -czf "linux-gui-harness-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" -C bundle .
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.whl
-            linux-x11-harness-*-x86_64-linux.tar.gz
+            linux-gui-harness-*-x86_64-linux.tar.gz
           generate_release_notes: true

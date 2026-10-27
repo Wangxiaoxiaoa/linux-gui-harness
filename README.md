@@ -1,10 +1,10 @@
 <div align="center">
 
-# linux-x11-harness
+# linux-gui-harness
 
 **Run Linux GUI apps in isolated X11 displays for AI agents.**
 
-[![CI](https://github.com/Wangxiaoxiaoa/linux-x11-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangxiaoxiaoa/linux-x11-harness/actions/workflows/ci.yml)
+[![CI](https://github.com/Wangxiaoxiaoa/linux-gui-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/Wangxiaoxiaoa/linux-gui-harness/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) · [中文](README.zh-CN.md)
@@ -15,7 +15,7 @@
 
 ## What is this?
 
-`linux-x11-harness` creates isolated X11 displays and lets AI agents control GUI applications. Each display gets its own X server, window manager, and application process group, so agents can click, type, capture screenshots, and read accessibility trees without touching the host desktop.
+`linux-gui-harness` creates isolated X11 displays and lets AI agents control GUI applications. Each display gets its own X server, window manager, and application process group, so agents can click, type, capture screenshots, and read accessibility trees without touching the host desktop.
 
 A live preview panel opens on your desktop while the agent works, so you can watch every click and screenshot in real time. Previews are read-only by default; double-click one to open an expanded interactive view where your mouse and keyboard directly control the sandboxed app.
 
@@ -31,7 +31,7 @@ Typical uses:
 - Verify accessibility compliance by auditing AT-SPI element metadata.
 - Read screen text with local OCR — works even without a vision model.
 
-See the [agent skill](skills/linux-x11-harness/SKILL.md) for concrete
+See the [agent skill](skills/linux-gui-harness/SKILL.md) for concrete
 workflows and tool usage patterns.
 
 ## Quick start
@@ -39,8 +39,8 @@ workflows and tool usage patterns.
 Install and register with your agents in one step:
 
 ```bash
-pip install linux-x11-harness
-linux-x11-harness setup
+pip install linux-gui-harness
+linux-gui-harness setup
 ```
 
 After setup, open your agent and start asking it to use GUI apps. The agent will launch the harness automatically when needed.
@@ -49,7 +49,7 @@ Requirements: Python 3.10+, Rust toolchain, Linux with `xvfb` and `openbox`.
 
 ## Supported agents
 
-`linux-x11-harness setup` auto-configures the MCP server and the agent skill where the agent supports them. Displays are always destroyed when the owning session ends; Codex can end them earlier via its `SessionEnd` hook.
+`linux-gui-harness setup` auto-configures the MCP server and the agent skill where the agent supports them. Displays are always destroyed when the owning session ends; Codex can end them earlier via its `SessionEnd` hook.
 
 | Agent | MCP server | Agent skill | Session-end hook |
 |---|---|---|---|
@@ -57,12 +57,12 @@ Requirements: Python 3.10+, Rust toolchain, Linux with `xvfb` and `openbox`.
 | [OpenCode](https://opencode.ai/) | ✅ | — | — (disconnect cleanup) |
 | [Pi](https://pi.ai/) | ✅ | ✅ | — (disconnect cleanup) |
 
-Other MCP-compatible agents can connect manually with `linux-x11-harness mcp`. See [Session lifecycle](docs/session-lifecycle.md).
+Other MCP-compatible agents can connect manually with `linux-gui-harness mcp`. See [Session lifecycle](docs/session-lifecycle.md).
 
 ## Documentation
 
 - [Usage guide](docs/usage.md) — display previews, sockets, and multi-agent isolation.
-- [Agent skill](skills/linux-x11-harness/SKILL.md) — quick reference for agents.
+- [Agent skill](skills/linux-gui-harness/SKILL.md) — quick reference for agents.
 - [Session lifecycle](docs/session-lifecycle.md) — how displays are tied to agent sessions, and per-host hooks.
 - [Architecture](docs/ARCHITECTURE.md) — crate layout and design notes.
 

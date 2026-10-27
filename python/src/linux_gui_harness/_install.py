@@ -1,0 +1,249 @@
+"""One-click registration of skill and MCP server with common agents."""
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+from linux_gui_harness import get_binary_path, get_lifecycle_path, get_skill_path
+
+
+def _log(msg: str) -> None:
+    print(f"\033[0;32m[setup]\033[0m {msg}")
+
+
+def _info(msg: str) -> None:
+    print(f"\033[0;34m[info]\033[0m {msg}")
+
+
+def _warn(msg: str) -> None:
+    print(f"\033[1;33m[warn]\033[0m {msg}", file=sys.stderr)
+
+
+def _err(msg: str) -> None:
+    print(f"\033[0;31m[error]\033[0m {msg}", file=sys.stderr)
+
+
+def _resolve_command() -> str:
+    """Return the command agents should invoke to start the MCP proxy."""
+    if cmd := shutil.which("linux-gui-harness"):
+        return cmd
+    binary = get_binary_path()
+    if binary.exists():
+        return str(binary)
+    _err("linux-gui-harness not found in PATH and bundled binary is missing.")
+    sys.exit(1)
+
+
+def _link_skill(target_dir: Path) -> None:
+    target_dir.mkdir(parents=True, exist_ok=True)
+    link = target_dir / "linux-gui-harness"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(get_skill_path(), target_is_directory=True)
+    _log(f"Linked skill -> {link}")
+
+
+def _run(cmd: list[str], check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        check=check,
+    )
+
+
+def _register_codex(command: str) -> None:
+    if not shutil.which("codex"):
+        _info("codex not found; skipping")
+        return
+
+    _link_skill(Path.home() / ".codex" / "skills")
+
+    _run(["codex", "mcp", "remove", "linux-gui-harness"])
+    result = _run(["codex", "mcp", "add", "linux-gui-harness", "--", command])
+    if result.returncode == 0:
+        _log("Registered MCP server for Codex")
+    else:
+        _err(f"Failed to register Codex MCP server: {result.stderr}")
+
+    # Session-end hook: destroy the session's harness displays when the
+    # session ends, via the lgh MCP server itself (mcp_tool handler — no
+    # script). Merged idempotently into ~/.codex/hooks.json.
+    hooks_path = Path.home() / ".codex" / "hooks.json"
+    data: dict = {}
+    if hooks_path.exists():
+        try:
+            data = json.loads(hooks_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _warn(f"Could not parse {hooks_path}; skipping hooks registration: {e}")
+            return
+    events = data.setdefault("hooks", {}).setdefault("session_end", [])
+    handler = {"type": "mcp_tool", "server": "linux-gui-harness", "tool": "lgh_session_end"}
+    already = any(
+        handler in entry.get("handlers", [])
+        for entry in events
+        if isinstance(entry, dict)
+    )
+    if not already:
+        events.append({"handlers": [handler]})
+        hooks_path.write_text(json.dumps(data, indent=2))
+        _log("Registered session_end hook for Codex")
+
+
+def _register_opencode(command: str) -> None:
+    if not shutil.which("opencode"):
+        _info("opencode not found; skipping")
+        return
+
+    # OpenCode has no CLI remove command; edit config directly to stay idempotent.
+    config_path = Path.home() / ".config" / "opencode" / "opencode.json"
+    if config_path.exists():
+        import json
+
+        try:
+            data = json.loads(config_path.read_text())
+            if "mcp" in data and "linux-gui-harness" in data["mcp"]:
+                del data["mcp"]["linux-gui-harness"]
+                config_path.write_text(json.dumps(data, indent=2))
+        except (json.JSONDecodeError, OSError) as e:
+            _warn(f"Could not clean up old OpenCode MCP entry: {e}")
+
+    result = _run(["opencode", "mcp", "add", "linux-gui-harness", "--", command])
+    if result.returncode == 0:
+        _log("Registered MCP server for OpenCode")
+    else:
+        _err(f"Failed to register OpenCode MCP server: {result.stderr}")
+
+    # Lifecycle plugin: inject opencode's session id into lgh_* tool calls.
+    plugin_src = get_lifecycle_path() / "opencode" / "lgh-lifecycle.js"
+    plugin_dir = Path.home() / ".config" / "opencode" / "plugins"
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    plugin_dst = plugin_dir / "lgh-lifecycle.js"
+    shutil.copy2(plugin_src, plugin_dst)
+    _log(f"Installed opencode lifecycle plugin -> {plugin_dst}")
+
+
+def _register_pi(command: str) -> None:
+    home = Path.home()
+    if not shutil.which("pi") and not (home / ".pi").exists():
+        _info("pi not found; skipping")
+        return
+
+    _link_skill(home / ".pi" / "agent" / "skills")
+
+    # pi reads user-level MCP servers from ~/.pi/agent/mcp.json; merge
+    # idempotently so repeated setups and manual entries survive.
+    mcp_path = home / ".pi" / "agent" / "mcp.json"
+    data: dict = {}
+    if mcp_path.exists():
+        try:
+            data = json.loads(mcp_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            _warn(f"Could not parse {mcp_path}; skipping MCP registration: {e}")
+            return
+    servers = data.setdefault("mcpServers", {})
+    servers["linux-gui-harness"] = {"command": command, "args": ["mcp"]}
+    mcp_path.parent.mkdir(parents=True, exist_ok=True)
+    mcp_path.write_text(json.dumps(data, indent=2))
+    _log("Registered MCP server for pi")
+
+    # Lifecycle shell: inject pi's session id into lgh_* tool calls.
+    ext_src = get_lifecycle_path() / "pi" / "lgh-lifecycle.ts"
+    ext_dir = home / ".pi" / "agent" / "extensions"
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    ext_dst = ext_dir / "lgh-lifecycle.ts"
+    shutil.copy2(ext_src, ext_dst)
+    _log(f"Installed pi lifecycle extension -> {ext_dst}")
+
+
+# (apt package name, binary name to check with shutil.which)
+_REQUIRED_SYSTEM_PACKAGES = [
+    ("xvfb", "Xvfb"),
+    ("openbox", "openbox"),
+    ("x11vnc", "x11vnc"),
+    ("tigervnc-viewer", "vncviewer"),
+    ("x11-utils", "xdpyinfo"),
+]
+
+
+def _check_system_deps() -> None:
+    """Check and install required system packages via apt."""
+    missing = [
+        pkg for pkg, binary in _REQUIRED_SYSTEM_PACKAGES if not shutil.which(binary)
+    ]
+
+    if not missing:
+        _log("All system dependencies present")
+        return
+
+    _warn(f"Missing system packages: {', '.join(missing)}")
+
+    if not shutil.which("apt-get"):
+        _err("Please install manually: sudo apt install " + " ".join(missing))
+        sys.exit(1)
+
+    _log(f"Installing: sudo apt install {' '.join(missing)}")
+    result = _run(["sudo", "apt-get", "install", "-y", *missing])
+    if result.returncode != 0:
+        _err(f"Failed to install system packages: {result.stderr}")
+        sys.exit(1)
+
+    _log("System dependencies installed")
+
+
+def _stop_stale_daemons() -> None:
+    """Stop running lgh daemons so the next session picks up the new build.
+
+    A pip upgrade replaces the binary but cannot touch detached daemons
+    spawned by earlier sessions; they keep serving the old code until
+    killed. Sweeps the well-known pid file plus any lgh test sockets left
+    in /tmp, SIGTERMs the PIDs, and removes the stale socket/pid files.
+    """
+    stopped: set[int] = set()
+
+    candidates: list[Path] = []
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+    candidates.append(Path(runtime_dir) / "linux-gui-harness.sock")
+    candidates.append(Path("/tmp") / "linux-gui-harness.sock")
+    candidates.extend(Path("/tmp").glob("lgh-*.sock"))
+
+    for sock in candidates:
+        pid_path = sock.with_suffix(".pid")
+        pid = 0
+        if pid_path.exists():
+            try:
+                pid = int(pid_path.read_text().strip())
+            except ValueError:
+                pass
+        if pid <= 0:
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            stopped.add(pid)
+        except (ProcessLookupError, PermissionError):
+            pass
+        pid_path.unlink(missing_ok=True)
+        sock.unlink(missing_ok=True)
+
+    if stopped:
+        _log(f"Stopped stale daemon(s): {', '.join(map(str, sorted(stopped)))}")
+
+
+def setup_agents() -> None:
+    """Detect common agents, install system deps, register skill + MCP server."""
+    _check_system_deps()
+    _stop_stale_daemons()
+
+    command = _resolve_command()
+    _log(f"Using MCP command: {command}")
+
+    _register_codex(command)
+    _register_opencode(command)
+    _register_pi(command)
+
+    print()
+    _log("Setup complete. Restart your agent to use linux-gui-harness.")

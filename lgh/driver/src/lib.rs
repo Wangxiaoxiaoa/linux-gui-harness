@@ -1,0 +1,195 @@
+#![forbid(unsafe_code)]
+use async_trait::async_trait;
+use lgh_action::{X11WindowManager, XtestInput};
+use lgh_core::{
+    A11yDriver, Bounds, CaptureDriver, DesktopOverview, Driver, GetWindowStateResult, InputDriver,
+    LghError, MouseButton, RegionCapture, Screenshot, StateExpectation, VerificationResult,
+    WindowDriver,
+};
+use lgh_state::{AtspiA11y, X11Capture};
+
+pub struct DefaultDriver {
+    input: XtestInput,
+    capture: X11Capture,
+    a11y: AtspiA11y,
+    window: X11WindowManager,
+}
+
+impl DefaultDriver {
+    pub fn new(display: &str) -> Result<Self, LghError> {
+        Ok(Self {
+            input: XtestInput::new(display)?,
+            capture: X11Capture::new(display)?,
+            a11y: AtspiA11y::new(display)?,
+            window: X11WindowManager::new(display)?,
+        })
+    }
+}
+
+#[async_trait]
+impl InputDriver for DefaultDriver {
+    async fn click(&self, x: i32, y: i32, button: MouseButton, count: u32) -> Result<(), LghError> {
+        self.input.click(x, y, button, count).await
+    }
+
+    async fn move_mouse(&self, x: i32, y: i32) -> Result<(), LghError> {
+        self.input.move_mouse(x, y).await
+    }
+
+    async fn scroll(&self, dx: i32, dy: i32) -> Result<(), LghError> {
+        self.input.scroll(dx, dy).await
+    }
+
+    async fn drag(
+        &self,
+        x1: i32,
+        y1: i32,
+        x2: i32,
+        y2: i32,
+        modifiers: &[&str],
+    ) -> Result<(), LghError> {
+        self.input.drag(x1, y1, x2, y2, modifiers).await
+    }
+
+    async fn type_text(&self, pid: Option<u32>, text: &str) -> Result<(), LghError> {
+        self.input.type_text(pid, text).await?;
+        // XTEST delivers to the focused widget. When nothing editable holds
+        // focus (the agent skipped clicking a field), fall back to writing
+        // through the AT-SPI tree instead of letting the text vanish.
+        if let Some(pid) = pid {
+            let focused_editable = lgh_state::atspi::focused_is_editable(pid)
+                .await
+                .unwrap_or(true);
+            if !focused_editable {
+                lgh_state::atspi::type_into_editable(pid, text).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn key(&self, key: &str, modifiers: &[&str]) -> Result<(), LghError> {
+        self.input.key(key, modifiers).await
+    }
+
+    async fn get_cursor_position(&self) -> Result<(i32, i32), LghError> {
+        self.input.get_cursor_position().await
+    }
+}
+
+#[async_trait]
+impl CaptureDriver for DefaultDriver {
+    async fn screenshot(&self) -> Result<Screenshot, LghError> {
+        self.capture.screenshot().await
+    }
+
+    async fn screenshot_window(&self, window_id: u32) -> Result<Screenshot, LghError> {
+        self.capture.screenshot_window(window_id).await
+    }
+
+    async fn capture_at_cursor(&self) -> Result<(u32, Screenshot), LghError> {
+        self.capture.capture_at_cursor().await
+    }
+
+    async fn capture_region(
+        &self,
+        window_id: u32,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+    ) -> Result<RegionCapture, LghError> {
+        self.capture.capture_region(window_id, x1, y1, x2, y2).await
+    }
+}
+
+#[async_trait]
+impl WindowDriver for DefaultDriver {
+    async fn focus_window(&self, window_id: u32) -> Result<(), LghError> {
+        self.window.focus_window(window_id).await
+    }
+
+    async fn set_window_frame(
+        &self,
+        window_id: u32,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    ) -> Result<(), LghError> {
+        self.window
+            .set_window_frame(window_id, x, y, width, height)
+            .await
+    }
+
+    async fn close_window(&self, window_id: u32) -> Result<(), LghError> {
+        self.window.close_window(window_id).await
+    }
+}
+
+#[async_trait]
+impl A11yDriver for DefaultDriver {
+    async fn get_window_state(
+        &self,
+        pid: u32,
+        window_id: u32,
+        include_tree: bool,
+        include_screenshot: bool,
+    ) -> Result<GetWindowStateResult, LghError> {
+        self.a11y
+            .get_window_state(pid, window_id, include_tree, include_screenshot)
+            .await
+    }
+
+    async fn get_desktop_overview(&self) -> Result<DesktopOverview, LghError> {
+        self.a11y.get_desktop_overview().await
+    }
+
+    async fn set_value(
+        &self,
+        pid: u32,
+        index: usize,
+        value: &str,
+        focus_allowed: bool,
+    ) -> Result<(), LghError> {
+        self.a11y.set_value(pid, index, value, focus_allowed).await
+    }
+
+    async fn element_frame(&self, pid: u32, index: usize) -> Result<Bounds, LghError> {
+        self.a11y.element_frame(pid, index).await
+    }
+
+    async fn invoke_menu(&self, pid: u32, path: &[String]) -> Result<(), LghError> {
+        self.a11y.invoke_menu(pid, path).await
+    }
+
+    async fn verify_state(
+        &self,
+        pid: u32,
+        expect: &[StateExpectation],
+    ) -> Result<VerificationResult, LghError> {
+        self.a11y.verify_state(pid, expect).await
+    }
+}
+
+#[async_trait]
+impl Driver for DefaultDriver {
+    async fn click_element(
+        &self,
+        pid: u32,
+        index: usize,
+        button: MouseButton,
+    ) -> Result<(), LghError> {
+        // Primary activation goes through AT-SPI doAction: focus-free, no
+        // coordinate math, and immune to the GTK4 nested-label trap (the
+        // label inside a button swallows coordinate clicks). Other buttons
+        // and multi-clicks stay on the coordinate path.
+        if button == MouseButton::Left {
+            lgh_state::atspi::perform_action(pid, index).await?;
+            return Ok(());
+        }
+        let Bounds { x, y, w, h } = self.a11y.element_frame(pid, index).await?;
+        let cx = x + w as i32 / 2;
+        let cy = y + h as i32 / 2;
+        self.input.click(cx, cy, button, 1).await
+    }
+}

@@ -16,7 +16,7 @@ lines of protocol code in exchange for one system dependency
 
 ### Launch
 
-`lxh_display_create` spawns, alongside Xvfb and openbox:
+`lgh_display_create` spawns, alongside Xvfb and openbox:
 
 ```bash
 x11vnc -display :<N> -rfbport <5900+K> -nopw -shared -forever
@@ -40,7 +40,7 @@ x11vnc syncs the VNC client clipboard with the sandbox display
 natively (CutText extension). The desktop spoke (:0 -> hub) stays:
 desktop-to-sandbox clipboard flow still goes through the hub. The
 sandbox->desktop direction for VNC users is handled by x11vnc; for
-agents it goes through lxh_clipboard_set as before.
+agents it goes through lgh_clipboard_set as before.
 
 ### Policy
 
@@ -52,7 +52,7 @@ agent).
 
 ## Scope
 
-- Delete: `lxh/preview/src/expando.rs` (512 lines), the panel's
+- Delete: `lgh/preview/src/expando.rs` (512 lines), the panel's
   expando wiring, the SelectionClear/SelectionRequest serving in the
   sandbox spoke (x11vnc serves the sandbox clipboard now).
 - Keep: the desktop spoke (origin filter, hub -> :0 read path), the

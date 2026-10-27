@@ -3,7 +3,7 @@
 ## Problem
 
 Harness displays are separate X servers: their CLIPBOARD selections are
-independent of the user's desktop (`:0`). Today `lxh_clipboard_get/set`
+independent of the user's desktop (`:0`). Today `lgh_clipboard_get/set`
 operate on whatever X display the daemon process inherited (`$DISPLAY`,
 normally `:0`) via arboard, regardless of the `display_id` argument — an
 accidental bridge that works but is undocumented, fragile, and half of
@@ -20,7 +20,7 @@ clipboard_sync: "off" | "to_sandbox" (default) | "bidirectional"
 
 | Policy | desktop → sandbox | sandbox → desktop |
 |---|---|---|
-| `to_sandbox` (default) | automatic | only via explicit `lxh_clipboard_set` |
+| `to_sandbox` (default) | automatic | only via explicit `lgh_clipboard_set` |
 | `bidirectional` | automatic | automatic (VM-style; opt-in) |
 | `off` | never | never |
 
@@ -65,7 +65,7 @@ bridge is symmetrical (it only acts when `:0`'s fingerprint differs).
 Concurrent changes on both sides: canonical wins ties by version; last
 propagation wins, deterministic enough for text.
 
-### `lxh_clipboard_get/set` semantics after the refactor
+### `lgh_clipboard_get/set` semantics after the refactor
 
 - `set(text)`: hub writes canonical + arboard-set on `:0` + notifies
   spokes → user's desktop clipboard updated (explicit act) and sandbox
@@ -95,16 +95,16 @@ propagation wins, deterministic enough for text.
   channel (thread closes its window and exits).
 - Headless daemon (no `:0`): the user bridge does not start; sandbox
   spokes still run — canonical changes then come only from
-  `lxh_clipboard_set`, and sandboxes share among themselves.
+  `lgh_clipboard_set`, and sandboxes share among themselves.
 - The `:0` bridge starts lazily on the first display that needs it.
 
 ## Files
 
-- `lxh/daemon/src/clipboard.rs` (new): hub, user bridge, sandbox spoke
+- `lgh/daemon/src/clipboard.rs` (new): hub, user bridge, sandbox spoke
   (~280 lines).
-- `lxh/daemon/src/handlers.rs`: create/destroy/cleanup wiring;
+- `lgh/daemon/src/handlers.rs`: create/destroy/cleanup wiring;
   `clipboard_get/set` rerouted through the hub (~30 lines).
-- `lxh/daemon/src/tools.rs`: `DisplayCreateArgs.clipboard_sync`; updated
+- `lgh/daemon/src/tools.rs`: `DisplayCreateArgs.clipboard_sync`; updated
   descriptions for the three affected tools (~20 lines).
 - Docs: `usage.md` section, `ARCHITECTURE.md` row updates.
 

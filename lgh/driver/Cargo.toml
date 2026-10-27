@@ -1,0 +1,11 @@
+[package]
+name = "lgh-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lgh-core = { workspace = true }
+lgh-action = { workspace = true }
+lgh-state = { workspace = true }
+async-trait = { workspace = true }
