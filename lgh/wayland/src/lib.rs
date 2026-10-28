@@ -368,3 +368,147 @@ fn modifier_name(m: &str) -> Result<String, LghError> {
         other => return Err(LghError::InvalidArgument(format!("unknown modifier {other:?}"))),
     }.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- keysym_name ----
+
+    #[test]
+    fn keysym_enter() {
+        assert_eq!(keysym_name("enter").unwrap(), "Return");
+        assert_eq!(keysym_name("Return").unwrap(), "Return");
+    }
+    #[test]
+    fn keysym_escape() {
+        assert_eq!(keysym_name("escape").unwrap(), "Escape");
+        assert_eq!(keysym_name("esc").unwrap(), "Escape");
+    }
+    #[test]
+    fn keysym_single_char() {
+        assert_eq!(keysym_name("a").unwrap(), "a");
+        assert_eq!(keysym_name("Z").unwrap(), "z"); // lowercased
+    }
+    #[test]
+    fn keysym_f_key() {
+        assert_eq!(keysym_name("f5").unwrap(), "f5");
+    }
+    #[test]
+    fn keysym_unknown_multi_char() {
+        // Multi-char non-special names pass through as xkb keysym names
+        assert_eq!(keysym_name("Prior").unwrap(), "prior"); // lowercased
+    }
+    #[test]
+    fn keysym_f_alone_types_letter() {
+        assert_eq!(keysym_name("f").unwrap(), "f");
+    }
+
+    // ---- modifier_name ----
+
+    #[test]
+    fn modifier_ctrl() {
+        assert_eq!(modifier_name("ctrl").unwrap(), "ctrl");
+        assert_eq!(modifier_name("Control").unwrap(), "ctrl");
+    }
+    #[test]
+    fn modifier_super() {
+        assert_eq!(modifier_name("super").unwrap(), "logo");
+        assert_eq!(modifier_name("meta").unwrap(), "logo");
+    }
+    #[test]
+    fn modifier_unknown() {
+        assert!(modifier_name("hyper").is_err());
+    }
+
+    // ---- toplevels_from_tree ----
+
+    #[test]
+    fn tree_parses_views() {
+        let tree = serde_json::json!({
+            "id": 1, "type": "root", "name": "root",
+            "nodes": [{
+                "id": 2, "type": "output", "name": "HEADLESS-1",
+                "nodes": [{
+                    "id": 3, "type": "workspace", "name": "1",
+                    "nodes": [{
+                        "id": 5, "type": "con", "name": "XTerm",
+                        "app_id": null, "pid": 1234,
+                        "window_properties": {"class": "XTerm"},
+                        "focused": true, "geometry": {"x":0,"y":0,"width":640,"height":480}
+                    }]
+                }]
+            }]
+        });
+        let views = toplevels_from_tree(&tree);
+        assert_eq!(views.len(), 1);
+        let (id, name, pid) = &views[0];
+        assert_eq!(*id, 5);
+        assert_eq!(name, "XTerm");
+        assert_eq!(*pid, Some(1234));
+    }
+
+    #[test]
+    fn tree_empty_workspace() {
+        let tree = serde_json::json!({
+            "id": 1, "type": "root", "name": "root",
+            "nodes": []
+        });
+        let views = toplevels_from_tree(&tree);
+        assert!(views.is_empty());
+    }
+
+    // ---- capability matrix: Wayland driver refuses host desktop access ----
+
+    #[test]
+    fn a11y_driver_refuses() {
+        let driver = WaylandDriver::new(
+            "wayland-test".into(),
+            PathBuf::from("/tmp/nonexistent"),
+            "HEADLESS-1".into(),
+            800, 600,
+        );
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(driver.get_desktop_overview());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn driver_click_element_refuses() {
+        let driver = WaylandDriver::new(
+            "wayland-test".into(),
+            PathBuf::from("/tmp/nonexistent"),
+            "HEADLESS-1".into(),
+            800, 600,
+        );
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(driver.click_element(0, 0, MouseButton::Left));
+        assert!(result.is_err());
+    }
+}
+
+// ---- sway tree parsing ----
+
+pub(crate) fn toplevels_from_tree(tree: &serde_json::Value) -> Vec<(u32, String, Option<u32>)> {
+    fn collect(node: &serde_json::Value, out: &mut Vec<(u32, String, Option<u32>)>) {
+        let is_view = node.get("app_id").map(|v| v.is_string()).unwrap_or(false)
+            || node.get("window_properties").map(|v| v.is_object()).unwrap_or(false);
+        if is_view {
+            out.push((
+                node.get("id").and_then(|v| v.as_i64()).unwrap_or(0) as u32,
+                node.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                node.get("pid").and_then(|v| v.as_u64()).map(|v| v as u32),
+            ));
+        }
+        for key in ["nodes", "floating_nodes"] {
+            if let Some(children) = node.get(key).and_then(|v| v.as_array()) {
+                for c in children { collect(c, out); }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    collect(tree, &mut out);
+    out
+}
