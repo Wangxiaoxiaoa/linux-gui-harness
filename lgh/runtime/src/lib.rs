@@ -31,11 +31,28 @@ pub fn ensure_runtime_libs() {
     }
     let cur = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
     let parts: Vec<_> = std::env::split_paths(&cur).collect();
-    if parts.iter().any(|p| p == &lib_dir) {
+    // Multi-flavor lib subdirs (e.g. openblas-openmp, which provides the
+    // libblas.so.3 that wayvnc needs) live next to the main lib dir.
+    let mut add = vec![lib_dir.clone()];
+    if let Ok(subs) = std::fs::read_dir(&lib_dir) {
+        for s in subs.flatten() {
+            let p = s.path();
+            if p.is_dir() && p.join("libblas.so.3").exists() {
+                add.push(p);
+            }
+        }
+    }
+    let add: Vec<_> = add
+        .into_iter()
+        .filter(|p| !parts.iter().any(|e| e == p))
+        .collect();
+    if add.is_empty() {
         return;
     }
-    let mut next = std::env::join_paths(std::iter::once(lib_dir).chain(parts.into_iter()))
-        .expect("join LD_LIBRARY_PATH");
+    let next = std::env::join_paths(
+        add.into_iter().chain(parts.into_iter()),
+    )
+    .expect("join LD_LIBRARY_PATH");
     std::env::set_var("LD_LIBRARY_PATH", next);
 }
 

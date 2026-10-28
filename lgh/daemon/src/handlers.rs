@@ -94,6 +94,7 @@ pub async fn create_display(
     let display = state.runtime.create_display(config).await?;
     let id = display.id().to_string();
     let display_str = display.display().to_string();
+    let wd = display.wayland_display().map(str::to_string);
     let driver = display.driver_handle();
 
     if let Some(key) = &session.session_key {
@@ -104,7 +105,6 @@ pub async fn create_display(
 
     if preview {
         let title = preview_title(session, &args.name);
-        let wd = display.wayland_display().map(str::to_string);
         if let Err(e) = state.previews.open(&id, &display_str, wd.as_deref(), &title) {
             eprintln!("preview unavailable for {id}: {e}");
         }
@@ -116,7 +116,7 @@ pub async fn create_display(
         .await
         .insert(id.clone(), Arc::new(Mutex::new(display)));
     state.drivers.write().await.insert(id.clone(), driver);
-    let rfb_port = state.vnc.start(&display_str).await?;
+    let rfb_port = state.vnc.start(&display_str, wd.as_deref()).await?;
     state.previews.set_vnc_port(&id, rfb_port);
 
     Ok(json!({ "display_id": id, "display": display_str }))

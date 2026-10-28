@@ -13,7 +13,7 @@ use lgh_runtime::ManagedProcess;
 const RFB_PORT_BASE: u16 = 5900;
 const RFB_PORT_MAX: u16 = 5999;
 
-/// Track the x11vnc child and port per display string.
+/// Track the VNC server child and port per display string.
 pub struct VncRegistry {
     servers: Mutex<HashMap<String, VncServer>>,
 }
@@ -36,29 +36,55 @@ impl VncRegistry {
         }
     }
 
-    /// Spawn an x11vnc server for `display_str` if one is not already
-    /// running. Returns the RFB port it listens on.
-    pub async fn start(&self, display_str: &str) -> Result<u16, lgh_core::LghError> {
+    /// Spawn a VNC server for `display_str` if one is not already running.
+    /// Sway-backed worlds get wayvnc (wlroots screencopy — rootless
+    /// XWayland roots reject the X11 grabs x11vnc relies on); Xvfb worlds
+    /// keep x11vnc. Returns the RFB port the server listens on.
+    pub async fn start(
+        &self,
+        display_str: &str,
+        wayland_display: Option<&str>,
+    ) -> Result<u16, lgh_core::LghError> {
         let mut servers = self.servers.lock().await;
         if let Some(existing) = servers.get(display_str) {
             return Ok(existing.port);
         }
         let port = self.pick_port(&servers)?;
-        eprintln!("[vnc] spawning x11vnc -display {display_str} -rfbport {port}");
-        let child = ManagedProcess::spawn(
-            "x11vnc",
-            &[
-                "-display",
-                display_str,
-                "-rfbport",
-                &port.to_string(),
-                "-shared",  // multiple clients allowed
-                "-forever", // keep serving after client disconnect
-                "-nopw",    // local-only MVP: the sandbox is disposable
-            ],
-            &[],
-        )
-        .await?;
+        let child = match wayland_display {
+            Some(wd) => {
+                eprintln!("[vnc] spawning wayvnc {wd} -rfbport {port}");
+                // -S: per-instance control socket — wayvnc refuses to start
+                // twice otherwise (shared default ctl socket path).
+                ManagedProcess::spawn(
+                    "wayvnc",
+                    &[
+                        "-S",
+                        &format!("/tmp/lgh-wayvnc-{port}.sock"),
+                        "0.0.0.0",
+                        &port.to_string(),
+                    ],
+                    &[("WAYLAND_DISPLAY", wd)],
+                )
+                .await?
+            }
+            None => {
+                eprintln!("[vnc] spawning x11vnc -display {display_str} -rfbport {port}");
+                ManagedProcess::spawn(
+                    "x11vnc",
+                    &[
+                        "-display",
+                        display_str,
+                        "-rfbport",
+                        &port.to_string(),
+                        "-shared",  // multiple clients allowed
+                        "-forever", // keep serving after client disconnect
+                        "-nopw",    // local-only MVP: the sandbox is disposable
+                    ],
+                    &[],
+                )
+                .await?
+            }
+        };
         servers.insert(display_str.to_string(), VncServer { child, port });
         Ok(port)
     }
