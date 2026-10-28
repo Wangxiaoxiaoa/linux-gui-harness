@@ -11,3 +11,6 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 serde_json = "1"
 async-trait = "0.1"
 tokio = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
