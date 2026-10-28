@@ -203,6 +203,7 @@ async fn dispatch_tool_call(
         "lgh_zoom" => handlers::zoom(state, args).await,
         "lgh_hover" => handlers::hover(state, args).await,
         "lgh_capture_window" => handlers::screenshot_window(state, args).await,
+        "lgh_screenshot" => handlers::screenshot_full(state, args).await,
         "lgh_ocr" => handlers::ocr(state, args).await,
         "lgh_window_focus" => handlers::window_focus(state, args).await,
         "lgh_window_set_frame" => handlers::window_set_frame(state, args).await,

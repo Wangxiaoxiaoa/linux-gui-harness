@@ -82,13 +82,20 @@ pub async fn create_display(
     args: &Value,
 ) -> Result<Value, LghError> {
     let args: DisplayCreateArgs = parse_args(args)?;
-    let config = DisplayConfig::default();
+    let mut config = DisplayConfig::default();
+    if let Some(b) = &args.backend {
+        config.backend = match b.as_str() {
+            "wayland-headless" => lgh_runtime::Backend::SwayHeadless,
+            "wayland-nested" => lgh_runtime::Backend::SwayNested,
+            _ => lgh_runtime::Backend::Xvfb,
+        };
+    }
     let preview = args.preview.unwrap_or(true);
 
     let display = state.runtime.create_display(config).await?;
     let id = display.id().to_string();
     let display_str = display.display().to_string();
-    let driver = Arc::new(DefaultDriver::new(&display_str)?);
+    let driver = display.driver_handle();
 
     if let Some(key) = &session.session_key {
         display.set_owner(key.clone());
@@ -120,7 +127,7 @@ pub async fn attach_display(state: &DaemonState, args: &Value) -> Result<Value, 
     let display = state.runtime.attach_display(&args.display_id).await?;
     let id = display.id().to_string();
     let display_str = display.display().to_string();
-    let driver = Arc::new(DefaultDriver::new(&display_str)?);
+    let driver = display.driver_handle();
 
     state
         .displays
@@ -454,6 +461,17 @@ pub async fn get_cursor_position(state: &DaemonState, args: &Value) -> Result<Va
     let driver = find_driver(state, &args.display_id).await?;
     let (x, y) = driver.get_cursor_position().await?;
     Ok(json!({ "x": x, "y": y }))
+}
+
+pub async fn screenshot_full(state: &DaemonState, args: &Value) -> Result<Value, LghError> {
+    let args: crate::tools::ScreenshotArgs = parse_args(args)?;
+    let driver = find_driver(state, &args.display_id).await?;
+    let shot = driver.screenshot().await?;
+    if let Some(path) = &args.save_to {
+        let bytes = save_png(&shot.data, path)?;
+        return Ok(json!({ "saved_to": path, "bytes": bytes }));
+    }
+    Ok(json!({ "mimeType": "image/png", "data": encode_png(&shot.data) }))
 }
 
 pub async fn screenshot_window(state: &DaemonState, args: &Value) -> Result<Value, LghError> {

@@ -4,6 +4,13 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ScreenshotArgs {
+    pub display_id: String,
+    #[serde(default)]
+    pub save_to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ButtonArg {
     Left,
@@ -17,6 +24,8 @@ pub struct DisplayCreateArgs {
     pub preview: Option<bool>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub backend: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -370,6 +379,7 @@ fn annotations_for(name: &str) -> Value {
             | "lgh_get_desktop_overview"
             | "lgh_get_window_state"
             | "lgh_capture_window"
+            | "lgh_screenshot"
             | "lgh_ocr"
             | "lgh_zoom"
             | "lgh_clipboard_get"

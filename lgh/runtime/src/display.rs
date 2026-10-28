@@ -197,6 +197,11 @@ impl Display {
         &*self.driver
     }
 
+    /// Shared handle to this display's driver (for the daemon's map).
+    pub fn driver_handle(&self) -> std::sync::Arc<dyn lgh_core::Driver> {
+        std::sync::Arc::clone(&self.driver)
+    }
+
     pub fn info(&self) -> DisplayInfo {
         DisplayInfo {
             display: self.display.clone(),
