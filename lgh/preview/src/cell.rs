@@ -530,11 +530,20 @@ impl Cell {
         };
         let _ = std::fs::remove_file(&path);
         if data.is_empty() {
-            // Sandbox gone (compositor exited) or transient grab failure.
-            eprintln!(
-                "[cell] grim failed wd={wd}: status={:?}",
-                output.status.code()
-            );
+            // Distinguish transient grab failure from a dead sandbox: the
+            // socket file vanishing means the compositor exited — report
+            // DisplayGone so the cell closes instead of retrying forever.
+            let socket_gone = !std::path::Path::new(&format!(
+                "{}/{}",
+                std::env::var("XDG_RUNTIME_DIR")
+                    .unwrap_or_else(|_| "/tmp".into()),
+                wd
+            ))
+            .exists();
+            if socket_gone {
+                return Err(CellRenderError::DisplayGone);
+            }
+            eprintln!("[cell] grim failed wd={wd}: status={:?}", output.status.code());
             return Err(CellRenderError::Transient);
         }
         let (w, h, rgb) = match parse_ppm(&data) {
@@ -544,10 +553,6 @@ impl Cell {
                 return Err(CellRenderError::Transient);
             }
         };
-        if (w, h) != (self.source_width, self.source_height) {
-            self.source_width = w;
-            self.source_height = h;
-        }
         // PPM is RGB; pack into BGRA (X Z_PIXMAP layout for depth 24).
         let mut bgra = vec![0u8; rgb.len() / 3 * 4];
         for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {

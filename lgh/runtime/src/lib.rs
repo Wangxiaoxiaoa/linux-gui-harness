@@ -31,16 +31,12 @@ pub fn ensure_runtime_libs() {
     }
     let cur = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
     let parts: Vec<_> = std::env::split_paths(&cur).collect();
-    // Multi-flavor lib subdirs (e.g. openblas-openmp, which provides the
-    // libblas.so.3 that wayvnc needs) live next to the main lib dir.
-    let mut add = vec![lib_dir.clone()];
-    if let Ok(subs) = std::fs::read_dir(&lib_dir) {
-        for s in subs.flatten() {
-            let p = s.path();
-            if p.is_dir() && p.join("libblas.so.3").exists() {
-                add.push(p);
-            }
-        }
+    // The runtime ships BLAS in a flavor subdir; wayvnc needs libblas.so.3
+    // from openblas-openmp at spawn time.
+    let openblas = lib_dir.join("openblas-openmp");
+    let mut add = vec![lib_dir];
+    if openblas.is_dir() {
+        add.push(openblas);
     }
     let add: Vec<_> = add
         .into_iter()
@@ -49,10 +45,8 @@ pub fn ensure_runtime_libs() {
     if add.is_empty() {
         return;
     }
-    let next = std::env::join_paths(
-        add.into_iter().chain(parts.into_iter()),
-    )
-    .expect("join LD_LIBRARY_PATH");
+    let next = std::env::join_paths(add.into_iter().chain(parts.into_iter()))
+        .expect("join LD_LIBRARY_PATH");
     std::env::set_var("LD_LIBRARY_PATH", next);
 }
 

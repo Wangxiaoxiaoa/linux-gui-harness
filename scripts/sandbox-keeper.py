@@ -74,8 +74,7 @@ for i in range(N):
     rpc("tools/call", {"name": "lgh_app_launch", "arguments": {
         "display_id": did, "command": "xterm", "args": []}})
     rpc("tools/call", {"name": "lgh_preview_open", "arguments": {"display_id": did}})
-    rpc("tools/call", {"name": "lgh_display_enter", "arguments": {"display_id": did}})
-    print(f"  xterm + preview + VNC opened", flush=True)
+    print(f"  xterm + preview opened", flush=True)
 
 print(f"keeper holding {len(worlds)} sandbox(es) alive — Ctrl-C to stop", flush=True)
 try:

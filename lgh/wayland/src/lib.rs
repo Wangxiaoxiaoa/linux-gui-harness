@@ -41,87 +41,6 @@ impl WaylandDriver {
             cursor: Mutex::new((0, 0)),
         }
     }
-
-    async fn move_mouse(&self, x: i32, y: i32) -> Result<(), LghError> {
-        let mut s = pointer::VPtrSession::open(&self.display, self.width, self.height)
-            .map_err(|e| LghError::DisplayUnavailable(e.to_string()))?;
-        s.move_abs(x as u32, y as u32)?;
-        s.close()?;
-        Ok(())
-    }
-
-    async fn scroll(&self, dx: i32, dy: i32) -> Result<(), LghError> {
-        let mut s = pointer::VPtrSession::open(&self.display, self.width, self.height)
-            .map_err(|e| LghError::DisplayUnavailable(e.to_string()))?;
-        s.scroll(dx as f64, dy as f64)?;
-        s.close()?;
-        Ok(())
-    }
-
-    async fn drag(
-        &self,
-        x1: i32, y1: i32, x2: i32, y2: i32,
-        _modifiers: &[&str],
-    ) -> Result<(), LghError> {
-        let code = pointer::BTN_LEFT;
-        let steps = 25;
-        let mut s = pointer::VPtrSession::open(&self.display, self.width, self.height)
-            .map_err(|e| LghError::DisplayUnavailable(e.to_string()))?;
-        s.move_abs(x1 as u32, y1 as u32)?;
-        s.button(code, true)?;
-        for i in 1..=steps {
-            let t = i as f64 / steps as f64;
-            let x = x1 as f64 + (x2 as f64 - x1 as f64) * t;
-            let y = y1 as f64 + (y2 as f64 - y1 as f64) * t;
-            s.move_abs(x as u32, y as u32)?;
-        }
-        s.button(code, false)?;
-        s.close()?;
-        Ok(())
-    }
-
-    async fn type_text(&self, _pid: Option<u32>, text: &str) -> Result<(), LghError> {
-        let mut cmd = tokio::process::Command::new("wtype");
-        cmd.env("WAYLAND_DISPLAY", &self.display).arg("--").arg(text);
-        let out = cmd.output().await.map_err(|e| LghError::ProcessSpawnFailed(e.to_string()))?;
-        if !out.status.success() {
-            return Err(LghError::ProcessSpawnFailed(format!(
-                "wtype failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
-        Ok(())
-    }
-
-    async fn key(&self, key: &str, modifiers: &[&str]) -> Result<(), LghError> {
-        let keysym = keysym_name(key)?;
-        let mut args: Vec<String> = vec![];
-        for m in modifiers {
-            args.push("-M".into());
-            args.push(modifier_name(m)?);
-        }
-        args.push("-k".into());
-        args.push(keysym);
-        for m in modifiers.iter().rev() {
-            args.push("-m".into());
-            args.push(modifier_name(m)?);
-        }
-        let mut cmd = tokio::process::Command::new("wtype");
-        cmd.env("WAYLAND_DISPLAY", &self.display).args(&args);
-        let out = cmd.output().await.map_err(|e| LghError::ProcessSpawnFailed(e.to_string()))?;
-        if !out.status.success() {
-            return Err(LghError::ProcessSpawnFailed(format!(
-                "wtype failed: {}",
-                String::from_utf8_lossy(&out.stderr)
-            )));
-        }
-        Ok(())
-    }
-
-    async fn get_cursor_position(&self) -> Result<(i32, i32), LghError> {
-        let pos = *self.cursor.lock().unwrap();
-        Ok((pos.0 as i32, pos.1 as i32))
-    }
 }
 
 // ---- InputDriver ----
@@ -527,7 +446,6 @@ mod tests {
         let driver = WaylandDriver::new(
             "wayland-test".into(),
             PathBuf::from("/tmp/nonexistent"),
-            "HEADLESS-1".into(),
             800, 600,
         );
         let result = tokio::runtime::Runtime::new()
@@ -541,7 +459,6 @@ mod tests {
         let driver = WaylandDriver::new(
             "wayland-test".into(),
             PathBuf::from("/tmp/nonexistent"),
-            "HEADLESS-1".into(),
             800, 600,
         );
         let result = tokio::runtime::Runtime::new()

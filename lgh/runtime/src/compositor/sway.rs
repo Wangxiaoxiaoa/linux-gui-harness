@@ -108,7 +108,6 @@ pub async fn start(
         }
     }
     cmd.env_remove("DISPLAY");
-    cmd.process_group(0);
     cmd.stdin(Stdio::null());
     cmd.stdout(log);
     cmd.stderr(log_err);
@@ -234,34 +233,6 @@ pub async fn start(
         height,
     };
     Ok((proc, handle))
-}
-
-/// Teardown: SIGTERM-first (sway cleans its sockets), then SIGKILL,
-/// then sweep leftover files.
-pub async fn stop(handle: &SwayHandle) -> Result<(), LghError> {
-    let _ = std::process::Command::new("kill")
-        .args(["-TERM", &handle.pid.to_string()])
-        .status();
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while Instant::now() < deadline {
-        if !std::path::Path::new(&format!("/proc/{}", handle.pid)).exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    if std::path::Path::new(&format!("/proc/{}", handle.pid)).exists() {
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &handle.pid.to_string()])
-            .status();
-    }
-    // Sweep socket leftovers.
-    let _ = std::fs::remove_file(runtime_dir().join(&handle.wayland_display));
-    let _ = std::fs::remove_file(runtime_dir().join(format!(
-        ".{}.lock",
-        handle.wayland_display
-    )));
-    let _ = std::fs::remove_file(&handle.ipc);
-    Ok(())
 }
 
 fn ipc_candidates(pid: u32) -> Vec<PathBuf> {

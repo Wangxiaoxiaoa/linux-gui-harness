@@ -716,6 +716,9 @@ pub async fn verify_state(state: &DaemonState, args: &Value) -> Result<Value, Lg
 
     let mut consecutive: u64 = 0;
     let mut samples: u64 = 0;
+    // The loop body always assigns before line-below reads it; the None
+    // initializer itself is never observed.
+    #[allow(unused_assignments)]
     let mut last: Option<lgh_core::VerificationResult> = None;
     loop {
         let sample = driver.verify_state(args.pid, &expect).await?;

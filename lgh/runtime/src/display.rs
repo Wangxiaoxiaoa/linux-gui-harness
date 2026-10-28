@@ -186,11 +186,13 @@ impl Display {
             Backend::Xvfb => vec![("DISPLAY", &self.display)],
             // Wayland 世界：应用进沙盒 = WAYLAND_DISPLAY 指沙盒 socket
             //（原生客户端）；DISPLAY 指沙盒内 XWayland（:M），服务 X11
-            // 应用（xterm 等）。两个都设，应用各取所需。
+            // 应用（xterm 等）。两个都设，应用各取所需。create_wayland
+            // 总是设置 wayland_display，None 说明构造有 bug。
             _ => {
-                let mut env = vec![("WAYLAND_DISPLAY", self.wayland_display().unwrap_or(""))];
-                env.push(("DISPLAY", &self.display));
-                env
+                let wd = self.wayland_display().ok_or_else(|| {
+                    LghError::DisplayUnavailable("wayland world has no socket name".into())
+                })?;
+                vec![("WAYLAND_DISPLAY", wd), ("DISPLAY", &self.display)]
             }
         };
         let proc = ManagedProcess::spawn(command, args, &env).await?;
