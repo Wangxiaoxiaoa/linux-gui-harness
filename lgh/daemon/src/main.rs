@@ -65,6 +65,11 @@ async fn main() {
 }
 
 async fn run_serve(socket_path: PathBuf) {
+    // Runtime binaries (sway, wtype, grim, x11vnc) live outside the system
+    // prefix and need their private libs; without this a daemon started via
+    // systemd/detached-spawn (no env.sh) spawns children that die instantly
+    // on missing libwlroots.
+    lgh_runtime::ensure_runtime_libs();
     // If a live daemon already owns the socket, refuse to start — a second
     // instance must not steal the socket file out from under it.
     if tokio::net::UnixStream::connect(&socket_path).await.is_ok() {

@@ -107,10 +107,13 @@ impl PreviewPanel {
     }
 
     /// Show a preview for `display_id`; creates the container on first use.
+    /// `wayland_display` is the sandbox's Wayland socket name for sway-backed
+    /// worlds (grim render path); `None` for Xvfb worlds (GetImage path).
     pub fn open(
         &self,
         display_id: &str,
         target_display: &str,
+        wayland_display: Option<&str>,
         title: &str,
     ) -> Result<(), LghError> {
         let mut inner = self.inner.lock().unwrap();
@@ -196,6 +199,7 @@ impl PreviewPanel {
             container_win,
             display_id.to_string(),
             target_display,
+            wayland_display,
             &cell_title,
             rect,
             chrome,

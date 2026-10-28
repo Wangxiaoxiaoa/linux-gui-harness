@@ -79,10 +79,10 @@ pub async fn start(
     let before = wayland_sockets();
 
     let conf_path = dir.join(format!("w-{world_id}.sway.conf"));
-    std::fs::write(
-        &conf_path,
-        format!("bar {{\n    mode invisible\n}}\n"),
-    )
+    // Empty config: a `bar {}` block spawns swaybar, whose StatusNotifier
+    // tray probes crash sway on DBus-less hosts (verified: sway dies in
+    // ~1s with a bar block, runs indefinitely with an empty config).
+    std::fs::write(&conf_path, "")
     .map_err(|e| LghError::DisplayUnavailable(e.to_string()))?;
 
     let log = sway_log_file(world_id);
@@ -90,6 +90,9 @@ pub async fn start(
 
     let mut cmd = tokio::process::Command::new("sway");
     cmd.arg("-c").arg(&conf_path);
+    // Own process group: the daemon can be hit by stray terminal signals,
+    // and sway must survive them (it outlives the tool call that spawned it).
+    cmd.process_group(0);
     cmd.env("WLR_LIBINPUT_NO_DEVICES", "1");
     // Software rendering: reliable on VMs and headless hosts where the GPU
     // node is absent or inaccessible (Xvfb was software-rendered too).
@@ -138,6 +141,10 @@ pub async fn start(
             break;
         }
         if Instant::now() > deadline {
+            eprintln!(
+                "[sway] wait timeout pid={sway_pid}: ipc={ipc:?} sockets_after={:?}",
+                wayland_sockets()
+            );
             let _ = ManagedProcess::kill(&mut proc).await;
             return Err(LghError::DisplayUnavailable(format!(
                 "sway (pid {sway_pid}) did not produce a display socket in time"

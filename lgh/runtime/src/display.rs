@@ -46,6 +46,8 @@ impl Default for DisplayConfig {
 pub struct Display {
     id: String,
     display: String,
+    /// Sandbox Wayland socket name (sway-backed worlds only).
+    wayland_display: Option<String>,
     kind: DisplayKind,
     backend: Backend,
     width: u32,
@@ -75,6 +77,7 @@ impl Display {
         Ok(Self {
             id,
             display: display.clone(),
+            wayland_display: None,
             kind: DisplayKind::Harness,
             backend: config.backend,
             width: config.width,
@@ -116,6 +119,7 @@ impl Display {
         Ok(Self {
             id,
             display: x_display,
+            wayland_display: Some(handle.wayland_display.clone()),
             kind: DisplayKind::Harness,
             backend: config.backend,
             width: config.width,
@@ -134,6 +138,7 @@ impl Display {
         Ok(Self {
             id,
             display: display.clone(),
+            wayland_display: None,
             kind: DisplayKind::External,
             backend: Backend::Xvfb,
             width: 0,
@@ -158,6 +163,11 @@ impl Display {
         &self.kind
     }
 
+    /// The sandbox's own Wayland socket name, sway-backed worlds only.
+    pub fn wayland_display(&self) -> Option<&str> {
+        self.wayland_display.as_deref()
+    }
+
     /// Identity of the owning session, set by the daemon after creation.
     pub fn owner(&self) -> Option<String> {
         self.owner.lock().unwrap().clone()
@@ -172,13 +182,18 @@ impl Display {
     }
 
     pub async fn launch_app(&self, command: &str, args: &[&str]) -> Result<u32, LghError> {
-        let env: &[(&str, &str)] = match self.backend {
-            Backend::Xvfb => &[("DISPLAY", &self.display)],
-            // Wayland 世界：主显示是沙盒自己的 socket；沙盒内 XWayland
-            // 服务 X11 应用（:M 为探测到的沙盒显示号）。
-            _ => &[("WAYLAND_DISPLAY", &self.display)],
+        let env: Vec<(&str, &str)> = match self.backend {
+            Backend::Xvfb => vec![("DISPLAY", &self.display)],
+            // Wayland 世界：应用进沙盒 = WAYLAND_DISPLAY 指沙盒 socket
+            //（原生客户端）；DISPLAY 指沙盒内 XWayland（:M），服务 X11
+            // 应用（xterm 等）。两个都设，应用各取所需。
+            _ => {
+                let mut env = vec![("WAYLAND_DISPLAY", self.wayland_display().unwrap_or(""))];
+                env.push(("DISPLAY", &self.display));
+                env
+            }
         };
-        let proc = ManagedProcess::spawn(command, args, env).await?;
+        let proc = ManagedProcess::spawn(command, args, &env).await?;
         let pid = proc.pid();
         self.apps.lock().unwrap().push(proc);
         Ok(pid)

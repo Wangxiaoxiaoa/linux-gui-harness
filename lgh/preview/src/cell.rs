@@ -85,6 +85,7 @@ impl PreviewCell {
         parent: Window,
         display_id: String,
         target_display: &str,
+        wayland_display: Option<&str>,
         title: &str,
         rect: CellRect,
         chrome: CellChrome,
@@ -105,6 +106,7 @@ impl PreviewCell {
             parent,
             display_id: display_id.clone(),
             target_display: target_display.to_string(),
+            wayland_display: wayland_display.map(str::to_string),
             title: title.to_string(),
             chrome,
             events,
@@ -163,6 +165,8 @@ struct Cell {
     target_root: Window,
     source_width: u32,
     source_height: u32,
+    /// Sandbox Wayland socket name; Some → grim fallback render path.
+    wayland_display: Option<String>,
     user_conn: RustConnection,
     win: Window,
     gc: Gcontext,
@@ -183,6 +187,9 @@ struct CellStartup {
     parent: Window,
     display_id: String,
     target_display: String,
+    /// Sandbox Wayland socket name (e.g. `wayland-3`); set for sway-backed
+    /// worlds whose rootless XWayland root cannot be read with GetImage.
+    wayland_display: Option<String>,
     title: String,
     chrome: CellChrome,
     events: mpsc::Sender<CellEvent>,
@@ -254,6 +261,7 @@ impl Cell {
             parent,
             display_id,
             target_display,
+            wayland_display,
             title,
             chrome,
             events,
@@ -323,6 +331,7 @@ impl Cell {
             target_root,
             source_width,
             source_height,
+            wayland_display: wayland_display.clone(),
             user_conn,
             win,
             gc,
@@ -430,6 +439,11 @@ impl Cell {
     }
 
     fn render(&mut self) -> Result<(), CellRenderError> {
+        // Rootless XWayland roots reject GetImage (BadMatch) — sway never
+        // paints them. Fall back to grim over the sandbox's Wayland socket.
+        if self.wayland_display.is_some() {
+            return self.render_grim();
+        }
         let image = self
             .target_conn
             .get_image(
@@ -476,6 +490,95 @@ impl Cell {
             .check()
             .map_err(|_| CellRenderError::DisplayGone)?;
 
+        if self.hover {
+            self.draw_title_bar();
+        }
+        self.user_conn
+            .flush()
+            .map_err(|_| CellRenderError::DisplayGone)?;
+        Ok(())
+    }
+
+    /// Render one frame by running `grim -t ppm` on the sandbox's Wayland
+    /// socket. Slower than GetImage (~10ms/frame) but the only way to read
+    /// a sway sandbox's screen: rootless XWayland roots are never painted,
+    /// so GetImage fails with BadMatch.
+    ///
+    /// stdout is unsafe for this: grim probes fds with F_DUPFD and, under
+    /// a Rust Command spawn, writes the PPM to a stray inherited fd (verified
+    /// with strace: `write(4, "P6...")` while fd 1 stayed empty). A temp
+    /// file sidesteps the whole mess.
+    fn render_grim(&mut self) -> Result<(), CellRenderError> {
+        let wd = self.wayland_display.as_deref().expect("checked by caller");
+        let path = format!("/tmp/lgh-cell-{}.ppm", self.display_id);
+        let output = std::process::Command::new("grim")
+            .arg("-t")
+            .arg("ppm")
+            .arg(&path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .env("WAYLAND_DISPLAY", wd)
+            .output()
+            .map_err(|e| {
+                eprintln!("[cell] grim spawn failed: {e}");
+                CellRenderError::Transient
+            })?;
+        let data = if output.status.success() {
+            std::fs::read(&path).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let _ = std::fs::remove_file(&path);
+        if data.is_empty() {
+            // Sandbox gone (compositor exited) or transient grab failure.
+            eprintln!(
+                "[cell] grim failed wd={wd}: status={:?}",
+                output.status.code()
+            );
+            return Err(CellRenderError::Transient);
+        }
+        let (w, h, rgb) = match parse_ppm(&data) {
+            Some(v) => v,
+            None => {
+                eprintln!("[cell] ppm parse failed: {}B", data.len());
+                return Err(CellRenderError::Transient);
+            }
+        };
+        if (w, h) != (self.source_width, self.source_height) {
+            self.source_width = w;
+            self.source_height = h;
+        }
+        // PPM is RGB; pack into BGRA (X Z_PIXMAP layout for depth 24).
+        let mut bgra = vec![0u8; rgb.len() / 3 * 4];
+        for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
+            bgra[i * 4] = px[2];
+            bgra[i * 4 + 1] = px[1];
+            bgra[i * 4 + 2] = px[0];
+            bgra[i * 4 + 3] = 255;
+        }
+        let scaled = scale(&bgra, w, h, self.rect.width, self.rect.height);
+        let data = scaled.as_deref().unwrap_or(&bgra);
+        let (put_w, put_h) = if scaled.is_some() {
+            (self.rect.width, self.rect.height)
+        } else {
+            (w, h)
+        };
+        self.user_conn
+            .put_image(
+                ImageFormat::Z_PIXMAP,
+                self.win,
+                self.gc,
+                put_w as u16,
+                put_h as u16,
+                0,
+                0,
+                0,
+                24,
+                data,
+            )
+            .map_err(|_| CellRenderError::DisplayGone)?
+            .check()
+            .map_err(|_| CellRenderError::DisplayGone)?;
         if self.hover {
             self.draw_title_bar();
         }
@@ -556,6 +659,34 @@ impl Cell {
 
 /// Scale a 24-bit ZPixmap (BGRA) to the target size. Shared with the
 /// VNC client, which renders the same captures at a larger window size.
+/// Parse a binary PPM (P6): `P6\n<w> <h>\n255\n` + raw RGB bytes.
+fn parse_ppm(data: &[u8]) -> Option<(u32, u32, &[u8])> {
+    if data.starts_with(b"P6") {
+        // Everything up to the maxval terminator; comments (#+) allowed by
+        // the spec but grim never emits them.
+        let header_end = data.iter().position(|&b| b == b'\n')?;
+        let dims_end = data[header_end + 1..]
+            .iter()
+            .position(|&b| b == b'\n')?;
+        let maxval_end = data[header_end + 1 + dims_end + 1..]
+            .iter()
+            .position(|&b| b == b'\n')?;
+        let dims = std::str::from_utf8(
+            &data[header_end + 1..header_end + 1 + dims_end],
+        )
+        .ok()?;
+        let (w, h) = dims.split_once(' ')?;
+        let w: u32 = w.parse().ok()?;
+        let h: u32 = h.parse().ok()?;
+        let off = header_end + 1 + dims_end + 1 + maxval_end + 1;
+        let rgb = data.get(off..)?;
+        if rgb.len() >= (w as usize) * (h as usize) * 3 {
+            return Some((w, h, rgb));
+        }
+    }
+    None
+}
+
 pub(crate) fn scale(
     bgra: &[u8],
     src_w: u32,

@@ -16,6 +16,37 @@ pub mod xserver;
 pub use display::{Backend, Display, DisplayConfig, DisplayKind};
 pub use process::ManagedProcess;
 
+/// Ensure dynamically-loaded runtime binaries (sway, wtype, grim, x11vnc,
+/// Xvfb, ...) can resolve their private libraries even when the daemon was
+/// started without the runtime environment sourced: derive the lib dir from
+/// the resolved `sway` binary (`<prefix>/usr/bin/sway` →
+/// `<prefix>/usr/lib/x86_64-linux-gnu`) and prepend it to `LD_LIBRARY_PATH`
+/// in the current process, so every spawned child inherits it.
+pub fn ensure_runtime_libs() {
+    let lib_dir = which("sway")
+        .and_then(|p| p.ancestors().nth(2).map(|d| d.join("lib/x86_64-linux-gnu")));
+    let Some(lib_dir) = lib_dir else { return };
+    if !lib_dir.is_dir() {
+        return;
+    }
+    let cur = std::env::var_os("LD_LIBRARY_PATH").unwrap_or_default();
+    let parts: Vec<_> = std::env::split_paths(&cur).collect();
+    if parts.iter().any(|p| p == &lib_dir) {
+        return;
+    }
+    let mut next = std::env::join_paths(std::iter::once(lib_dir).chain(parts.into_iter()))
+        .expect("join LD_LIBRARY_PATH");
+    std::env::set_var("LD_LIBRARY_PATH", next);
+}
+
+/// Resolve a binary name via `PATH`.
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|c| c.is_file())
+}
+
 fn process_scoped_display_start() -> u32 {
     // Use the process id so that concurrent daemon instances do not collide
     // on the low display numbers starting at :99. Two constraints: display

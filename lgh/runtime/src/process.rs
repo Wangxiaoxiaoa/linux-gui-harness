@@ -25,9 +25,10 @@ impl ManagedProcess {
         command
             .args(args)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-
+            .stderr(Stdio::null());
+        // Own process group: stray signals to the daemon's group (terminal
+        // teardown, debugger interrupts) must not kill sandbox children.
+        command.process_group(0);
         for (k, v) in envs {
             command.env(k, v);
         }

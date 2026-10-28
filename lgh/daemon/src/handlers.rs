@@ -104,7 +104,8 @@ pub async fn create_display(
 
     if preview {
         let title = preview_title(session, &args.name);
-        if let Err(e) = state.previews.open(&id, &display_str, &title) {
+        let wd = display.wayland_display().map(str::to_string);
+        if let Err(e) = state.previews.open(&id, &display_str, wd.as_deref(), &title) {
             eprintln!("preview unavailable for {id}: {e}");
         }
     }
@@ -325,11 +326,14 @@ pub async fn preview_open(
 ) -> Result<Value, LghError> {
     let args: DisplayIdArgs = parse_args(args)?;
     let display = find_display(state, &args.display_id).await?;
-    let display_str = display.lock().await.display().to_string();
+    let (display_str, wd) = {
+        let d = display.lock().await;
+        (d.display().to_string(), d.wayland_display().map(str::to_string))
+    };
     let title = preview_title(session, &None);
     state
         .previews
-        .open(&args.display_id, &display_str, &title)?;
+        .open(&args.display_id, &display_str, wd.as_deref(), &title)?;
     Ok(json!({ "success": true }))
 }
 
