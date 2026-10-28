@@ -88,6 +88,9 @@ impl Display {
     }
 
     /// Wayland 世界：sway 组合器 + 沙盒内应用。
+    ///
+    /// `display` 统一为沙盒内 XWayland 的 `:M` 编号——预览面板和 VNC
+    /// 都通过 X11 连接沙盒内 XWayland，与 Xvfb 沙盒完全一致。
     pub async fn create_wayland(
         id: String,
         config: DisplayConfig,
@@ -99,6 +102,10 @@ impl Display {
         let (compositor, handle) =
             crate::compositor::sway::start(&id, sway_mode, config.width, config.height).await?;
 
+        let x_display = handle.x_display.clone().ok_or_else(|| {
+            LghError::DisplayUnavailable("sandbox XWayland display not found".into())
+        })?;
+
         let driver = Arc::new(lgh_wayland::WaylandDriver::new(
             handle.wayland_display.clone(),
             handle.ipc.clone(),
@@ -108,7 +115,7 @@ impl Display {
 
         Ok(Self {
             id,
-            display: handle.wayland_display.clone(),
+            display: x_display,
             kind: DisplayKind::Harness,
             backend: config.backend,
             width: config.width,
