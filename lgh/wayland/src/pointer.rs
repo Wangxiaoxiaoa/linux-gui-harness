@@ -58,7 +58,7 @@ impl Dispatch<ZwlrVirtualPointerV1, ()> for App {
 }
 
 pub struct VPtrSession {
-    conn: Connection,
+    _conn: Connection,
     queue: wayland_client::EventQueue<App>,
     app: App,
     ptr: ZwlrVirtualPointerV1,
@@ -74,7 +74,7 @@ impl VPtrSession {
             .unwrap_or_else(|| std::path::PathBuf::from(wayland_display));
         let stream = std::os::unix::net::UnixStream::connect(&path)
             .map_err(|e| lgh_core::LghError::DisplayUnavailable(format!("virtual pointer: cannot connect to {}: {e}", path.display())))?;
-        let conn = Connection::from_socket(stream).map_err(|e| lgh_core::LghError::DisplayUnavailable(e.to_string()))?;
+let conn = Connection::from_socket(stream).map_err(|e| lgh_core::LghError::DisplayUnavailable(e.to_string()))?;
         let mut queue = conn.new_event_queue::<App>();
         let qh = queue.handle();
         conn.display().get_registry(&qh, ());
@@ -86,7 +86,7 @@ impl VPtrSession {
             .ok_or(lgh_core::LghError::DisplayUnavailable("compositor does not expose zwlr_virtual_pointer_manager_v1".into()))?;
         let ptr = manager.create_virtual_pointer(None, &qh, ());
         Ok(Self {
-            conn, queue, app: App { manager: None },
+            _conn: conn, queue, app: App { manager: None },
             ptr, start: Instant::now(), width, height,
         })
     }

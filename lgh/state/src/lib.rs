@@ -857,7 +857,7 @@ fn pid_of_window(conn: &RustConnection, window: u32) -> Result<u32, LghError> {
 /// LOCAL_CLIENT_PID mask then reports its process.
 fn pid_via_xres(conn: &RustConnection, window: u32) -> Option<u32> {
     use x11rb::protocol::res::{ClientIdMask, ClientIdSpec, ConnectionExt as _};
-    use x11rb::protocol::xproto::ConnectionExt as _;
+    
 
     let clients = conn.res_query_clients().ok()?.reply().ok()?.clients;
     for (idx, c) in clients.iter().enumerate() {

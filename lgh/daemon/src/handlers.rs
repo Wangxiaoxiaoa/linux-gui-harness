@@ -11,7 +11,6 @@ use crate::tools::{
 use lgh_core::{
     Driver, ElementExpectation, LghError, MouseButton, StateExpectation, WindowExpectation,
 };
-use lgh_driver::DefaultDriver;
 use lgh_preview::PreviewPanel;
 use lgh_runtime::{Display, DisplayConfig, Runtime};
 use serde_json::{json, Value};

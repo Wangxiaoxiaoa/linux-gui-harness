@@ -15,7 +15,7 @@ impl ManagedProcess {
     /// Adopt an already-spawned child (for compositor backends that need
     /// custom spawn logic). The caller is responsible for having set
     /// `kill_on_drop` and any process-group configuration.
-    pub fn from_child(mut child: Child) -> Self {
+    pub fn from_child(child: Child) -> Self {
         let pid = child.id().unwrap_or(0);
         Self { child, pid }
     }

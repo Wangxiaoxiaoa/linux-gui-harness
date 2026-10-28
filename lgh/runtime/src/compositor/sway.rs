@@ -105,7 +105,6 @@ pub async fn start(
         }
     }
     cmd.env_remove("DISPLAY");
-    use std::os::unix::process::CommandExt;
     cmd.process_group(0);
     cmd.stdin(Stdio::null());
     cmd.stdout(log);
@@ -139,7 +138,7 @@ pub async fn start(
             break;
         }
         if Instant::now() > deadline {
-            ManagedProcess::kill(&mut proc).await;
+            let _ = ManagedProcess::kill(&mut proc).await;
             return Err(LghError::DisplayUnavailable(format!(
                 "sway (pid {sway_pid}) did not produce a display socket in time"
             )));

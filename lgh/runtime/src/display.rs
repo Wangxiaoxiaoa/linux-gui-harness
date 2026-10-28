@@ -102,7 +102,6 @@ impl Display {
         let driver = Arc::new(lgh_wayland::WaylandDriver::new(
             handle.wayland_display.clone(),
             handle.ipc.clone(),
-            handle.output.clone(),
             config.width,
             config.height,
         ));
